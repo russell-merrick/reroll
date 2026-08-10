@@ -1,154 +1,287 @@
-# Austin Russell Loop Machine
+# Reroll
+
+**By Austin Russell**
 
 Local tool to turn **your** samples + Serum libraries into inspiring loops, then hand off to Ableton.
 
-> Your collection, infinite ideas.
+> Your collection, infinite ideas. · Lock the keepers. Dice the rest.
 
-Open app → Generate → Listen → Lock / dice → Export → Produce in Ableton.
+**Open app → 🎲 Generate → Listen → Lock / dice → Export → Produce in Ableton.**
 
-**Not** a song finisher, not cloud AI music, not a DAW replacement.
+Not a song finisher, not cloud AI music, not a DAW replacement.
 
 ---
 
-## Status (for continuing in a new chat)
+## Requirements
 
-Use this section as the handoff. Project path: `C:\Users\russe\Desktop\loop_gen_project`.
+| Piece | Version / notes |
+|--------|------------------|
+| **OS** | Windows (paths and Serum VST layout assume Windows) |
+| **Python (app)** | 3.11+ recommended (3.14 works for the FastAPI app) |
+| **Python (Serum host)** | **3.12 only** — DawDreamer does not track the latest CPython |
+| **Browser** | Modern Chromium / Edge / Firefox (Web Audio) |
+| **Optional: Serum** | Serum 1 and/or Serum 2 installed as VST3 for offline bounce |
+| **Optional: library** | Splice samples and/or Xfer Serum preset folders (see [Library roots](#library-roots)) |
 
-### Run
+Without Serum host deps, the UI still runs: drums/samples work; synth tracks fall back to a simple JS synth.
+
+---
+
+## Quick start
 
 ```powershell
-cd C:\Users\russe\Desktop\loop_gen_project
+git clone <your-repo-url>
+cd reroll
+# or: cd loop_gen_project
+
+# App dependencies
+python -m pip install -r requirements.txt
+
+# Run the server
 python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Open **http://127.0.0.1:8000** (not `file://`).
+Open **http://127.0.0.1:8000** (must be via the server — not `file://`).
 
-If port 8000 is stuck on an old process, kill uvicorn/python orphans or use another port.
+First load loads **`library.db`** (SQLite) when present; otherwise scans default library roots, then saves the DB for faster next start. **Rescan** always re-walks disk and refreshes the DB.
 
-### Tests
+### Optional: real Serum bounce
 
-```powershell
-cd C:\Users\russe\Desktop\loop_gen_project
-python -m pip install -r requirements-dev.txt
-python -m pytest tests/unit -q
-```
-
-Optional live Serum sync (needs **Python 3.12** + DawDreamer + local presets):
-
-```powershell
-py -3.12 -m pip install dawdreamer numpy scipy serum2-preset-loader pytest
-py -3.12 -m pytest tests/host -m serum -q
-# or: py -3.12 host/test_serum_sync.py
-```
-
-### Host deps (Serum bounce)
+Install **Python 3.12**, then:
 
 ```powershell
 py -3.12 -m pip install dawdreamer numpy scipy serum2-preset-loader
 ```
 
-| Plugin | Path | Presets |
-|--------|------|---------|
-| Serum 1 | `C:\Program Files\Common Files\VST3\Serum_x64.dll` | `.fxp` via `load_preset` |
-| Serum 2 | `C:\Program Files\Common Files\VST3\Serum2.vst3` | `.SerumPreset` via `serum2-preset-loader` → `load_state` |
+| Plugin | Default path | Presets |
+|--------|----------------|---------|
+| Serum 1 | `C:\Program Files\Common Files\VST3\Serum_x64.dll` | `.fxp` under Xfer Serum Presets |
+| Serum 2 | `C:\Program Files\Common Files\VST3\Serum2.vst3` | `.SerumPreset` under Xfer Serum 2 Presets |
 
-Serum 2 host process often **ACCESS_VIOLATIONs on exit** after printing JSON — backend accepts `ok: true` stdout even when return code is bad.
+The app shells out to `py -3.12` / `Python312` for render + macros. Serum 2 may **ACCESS_VIOLATION on process exit** after a successful bounce — the backend still accepts `ok: true` JSON.
 
-### Library scan roots
+### Optional: user preferences template
 
-- `Documents\Splice\Samples\packs`
-- `Documents\Xfer\Serum Presets\Presets` (Serum 1)
-- `Documents\Xfer\Serum 2 Presets\Presets` (Serum 2)
+Runtime prefs are written to `user_settings.json` (gitignored). To seed manually:
 
-Typical counts after scan: ~500 samples, ~900+ S1, ~700+ S2 (in-memory only).
-
-### What works now
-
-| Area | Notes |
-|------|--------|
-| **Dynamic tracks** | Add (`+` + type), delete (🗑), stack any number |
-| **Generate / dice / shuffle** | Fills unlocked tracks; payload uses `tracks[]` |
-| **Serum engine filter** | Per Serum track: **1** / **2** / **\*** next to M (strict; no S2→S1 fallback) |
-| **Serum type filter** | Dropdown on Serum tracks (BASS, LEAD, ARP, …) |
-| **MIDI** | Monophonic 16-step grids; **M** opens editor; **multiple editors stack** |
-| **Macros** | In MIDI panel; S1 mapped renames only; S2 shows Macro 1–8 |
-| **Play** | Toggle (Space); loops forever; no separate Stop button |
-| **Sample loops** | Phrase beds; BPM from filename (e.g. `_155_`) warped to session BPM |
-| **Serum audio** | Offline bounce via host → stem; **re-triggers each cycle** on transport (kick-locked); latency trim + exact bar length |
-| **JS synth fallback** | If host/render fails |
-| **Options** | Inline section above loop (not modal): filter out risers/builds/downlifters/rolls |
-| **Export folder** | `exports/` with `audio/` + `midi/`; **Open export folder** opens Explorer |
-| **Mute / solo / lock** | Live mute/solo; lock keeps sound on generate |
-
-### Key APIs
-
-- `POST /api/generate` — `tracks`, `filter_risers`, etc.
-- `POST /api/reroll` — `slot`, `serum_engine`, `serum_type`, `filter_risers`
-- `POST /api/serum/render` · `POST /api/serum/macros` · `POST /api/serum/open`
-- `POST /api/export/open` · `GET /api/export/path`
-- `GET /api/library` · `POST /api/scan`
-
-### Layout
-
-```text
-loop_gen_project/
-  README.md
-  requirements.txt
-  backend/          # FastAPI (app can be 3.14)
-  frontend/         # UI + Web Audio + MIDI
-  host/             # Python 3.12 DawDreamer renderer (cli_render, cache/)
-  exports/          # Ableton handoff folder
-  spikes/
-  docs/
+```powershell
+copy user_settings.example.json user_settings.json
 ```
 
-### Not done / next
-
-- Full export of stems + `.mid` into `exports/`
-- SQLite / durable catalog
-- Style-based pack filtering
-- Ableton project generation
-- AI tags / “More like this”
-- Splice pack artwork (not available locally; waveforms would be the offline path)
-
-### Explicit non-goals (for now)
-
-- Full song arrangement  
-- Cloud sample libraries  
-- Shipping or cracking Serum  
+Defaults also work with no file present.
 
 ---
 
-## Product goals
+## Dependencies
 
-1. Set BPM / key / style  
-2. **Generate** from *your* library  
-3. Lock keepers, dice the rest  
-4. Edit Serum MIDI (**M**, stackable)  
-5. Preview fast (Space)  
-6. Export → Ableton  
+### Main app (`requirements.txt`)
 
-Optimize for **time-to-inspiring-start**, not finishing the track in-app.
+| Package | Role |
+|---------|------|
+| `fastapi` | HTTP API |
+| `uvicorn[standard]` | ASGI server |
+| `python-multipart` | Form uploads (future-proof) |
+| `mutagen` | Sample metadata |
+| `mido` | MIDI helpers / export path |
+
+Install:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+### Dev / tests (`requirements-dev.txt`)
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m pytest tests/unit -q
+```
+
+### Serum host (Python 3.12, separate install)
+
+```powershell
+py -3.12 -m pip install dawdreamer numpy scipy serum2-preset-loader
+```
+
+Optional live Serum sync test:
+
+```powershell
+py -3.12 -m pytest tests/host -m serum -q
+# or: py -3.12 host/test_serum_sync.py
+```
 
 ---
 
-## Architecture
+## Library roots
+
+On scan, the app looks under your user profile (typical installs):
+
+| Kind | Path |
+|------|------|
+| Samples | `%USERPROFILE%\Documents\Splice\Samples\packs` |
+| Serum 1 | `%USERPROFILE%\Documents\Xfer\Serum Presets\Presets` |
+| Serum 2 | `%USERPROFILE%\Documents\Xfer\Serum 2 Presets\Presets` |
+
+Rescan anytime from the **Library** UI or `POST /api/scan`. Catalog is in-memory only (restart = rescan on startup).
+
+---
+
+## Using the app
+
+1. Set **BPM**, **key**, **style** (session controls).
+2. **Generate** — fills unlocked tracks from your library.
+3. **Lock** keepers; **dice** (🔀 per track) or **Shuffle** the rest.
+4. **Play** (or **Space**) — loops forever; button toggles stop.
+5. Serum tracks: **M** opens MIDI editor (stackable); length toolbar + drag to resize notes; macros when the host can load the preset.
+6. Sample **loops** (hats, beds, etc.) warp to session BPM when the filename has a tempo tag (e.g. `_140_`) and re-lock to the kick cycle.
+7. **Export for Ableton** — flat clips + in-app **drag tray** (drop onto an open Live set). Also mirrors to `exports/ABLETON_DROP/` and Live **User Library → Samples → Reroll**.
+
+### Transport status bar
+
+| Color | Meaning |
+|-------|---------|
+| Grey | Idle |
+| Green (breathing) | Playing |
+| Yellow | Working (load samples, Serum bounce, generate, dice) |
+
+### Keyboard
+
+| Shortcut | Action |
+|----------|--------|
+| **Space** | Play / stop (when not typing in a field) |
+| **Ctrl+Z** | Undo |
+| **Ctrl+Y** / **Ctrl+Shift+Z** | Redo |
+
+---
+
+## Project layout
 
 ```text
-Browser UI (frontend/)
-      ↕
-FastAPI (backend/) — scan, generate, options, export open
+reroll/   (or loop_gen_project/)
+  README.md
+  requirements.txt          # main app
+  requirements-dev.txt      # + pytest
+  user_settings.example.json
+  backend/                  # FastAPI (scan, generate, settings, Serum proxy)
+  frontend/                 # UI + Web Audio + MIDI editor
+  host/                     # Python 3.12 DawDreamer CLI + worker + cache/
+  exports/                  # Ableton handoff (gitignored contents)
+  saves/                    # Named loop JSON (gitignored contents)
+  tests/                    # unit (+ optional host/serum)
+  docs/
+  spikes/                   # experiments (see spikes/README.md)
+```
+
+### Architecture
+
+```text
+Browser (frontend/)
+      ↕  HTTP
+FastAPI (backend/) — catalog, generate, options, export open
       │
-In-memory catalog
-      ↕
-Host CLI (Python 3.12 + DawDreamer) on each Serum render/macros
+In-memory catalog (scan of local disks)
+      ↕  subprocess
+Host CLI / worker (Python 3.12 + DawDreamer)
       ├── Serum 1 (.fxp) or Serum 2 (.SerumPreset)
-      ├── MIDI from patterns
+      ├── MIDI from monophonic grids
       └── bounce WAV → host/cache → browser
 ```
 
 ---
 
-## Critical principle
+## Development
 
-> **I didn’t make this track for you. I made it much easier for you to start making it.**
+```powershell
+# App with auto-reload
+python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
+
+# Unit tests (no Serum required)
+python -m pytest tests/unit -q
+```
+
+If port **8000** is stuck, stop leftover `python`/`uvicorn` processes or pick another port:
+
+```powershell
+python -m uvicorn backend.app:app --host 127.0.0.1 --port 8001 --reload
+```
+
+### Useful APIs
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/health` | Liveness |
+| `GET` | `/api/library` | Catalog summary |
+| `POST` | `/api/scan` | Rescan library roots |
+| `POST` | `/api/generate` | Fill tracks |
+| `POST` | `/api/reroll` | Dice one track |
+| `POST` | `/api/serum/render` | Offline Serum bounce |
+| `POST` | `/api/serum/macros` | Macro names/values |
+| `POST` | `/api/serum/open` | Launch plugin UI |
+| `GET`/`POST` | `/api/settings` | User prefs |
+| `POST` | `/api/export` | Export session → stems + MIDI folder |
+| `POST` | `/api/export/open` | Open `exports/` in Explorer |
+
+### Export → Ableton (open set)
+
+```text
+exports/
+  20260810_153012_techno-f-minor-140bpm/
+    01_kick_….wav
+    02_bass_….wav
+    03_bass_…_midi.mid
+    manifest.json
+  ABLETON_DROP/          # always the latest export (flat)
+```
+
+Also copied to `Documents/Ableton/User Library/Samples/Reroll/` when that tree exists — drag from **Live’s own browser** without leaving Live.
+
+In the app: **Export for Ableton** → drag chips (or **Drag all**) onto Session/Arrangement.  
+Fallback: **Select in Explorer** (files pre-selected) → drag into Live.
+
+### Library DB
+
+- File: `library.db` (gitignored, project root)
+- Written on first scan / every **Rescan**
+- Loaded on startup when non-empty
+
+---
+
+## What works today
+
+| Area | Notes |
+|------|--------|
+| Dynamic tracks | Add / delete; stack any number |
+| Generate / dice / shuffle | Unlocked tracks only; Generate auto-plays |
+| Serum 1 / 2 filter | Options + per-track type (BASS, LEAD, …) |
+| MIDI | Monophonic 16-step grids; note length + edge drag |
+| Macros | S1 mapped renames; S2 names from `.SerumPreset` file |
+| Sample loops | BPM warp + kick-cycle re-lock |
+| Serum stems | Offline bounce; re-trigger each loop cycle |
+| **Export** | Audio + MIDI package for Ableton |
+| **Library DB** | SQLite cache for fast restart |
+| JS synth fallback | If host missing or bounce fails |
+| Mute / solo / lock | Live while playing |
+| Undo / redo | Ctrl+Z / Ctrl+Y |
+
+---
+
+## Not done / non-goals
+
+**Next (rough):** style/pack-aware generate, Ableton `.als` project gen, “more like this”, richer library browser UI.
+
+**Non-goals for now:** full song arrangement, cloud libraries, shipping or cracking Serum.
+
+---
+
+## Product principle
+
+1. Set BPM / key / style  
+2. **Generate** from *your* library  
+3. Lock keepers, dice the rest  
+4. Edit Serum MIDI  
+5. Preview fast  
+6. Export → Ableton  
+
+Optimize for **time-to-inspiring-start**, not finishing the track in-app.
+
+> I didn’t make this track for you. I made it much easier for you to start making it.

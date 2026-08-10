@@ -1,4 +1,4 @@
-/* Austin Russell Loop Machine — dark studio UI */
+/* Reroll — By Austin Russell — dark studio UI */
 
 :root {
   --bg: #0c0d10;
@@ -594,7 +594,8 @@ body {
   border-color: transparent;
   background: transparent;
   filter: brightness(1.45) saturate(1.35) contrast(1.05);
-  font-size: 0.95rem;
+  /* Trash glyph reads larger than peer icons — ~20% smaller than default */
+  font-size: 0.68rem;
 }
 
 .icon-btn.delete:hover {
@@ -880,6 +881,126 @@ body {
 
 .transport-row-secondary {
   margin-bottom: 12px;
+}
+
+/* Ableton export drag tray */
+.export-drop {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.export-drop[hidden] {
+  display: none !important;
+}
+
+.export-drop.is-open {
+  display: block;
+}
+
+.export-drop-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+.export-drop-meta {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-faint);
+}
+
+.export-drag-all {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 10px;
+  margin-bottom: 8px;
+  border: 1px dashed rgba(110, 231, 183, 0.45);
+  border-radius: 8px;
+  background: rgba(110, 231, 183, 0.08);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: grab;
+  user-select: none;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+
+.export-drag-all:hover {
+  background: rgba(110, 231, 183, 0.14);
+  border-color: var(--accent-dim);
+}
+
+.export-drag-all:active,
+.export-drag-all.is-dragging {
+  cursor: grabbing;
+  transform: scale(0.99);
+  opacity: 0.9;
+}
+
+.export-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.export-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 5px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-family: var(--mono);
+  cursor: grab;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.export-chip:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  background: rgba(110, 231, 183, 0.08);
+}
+
+.export-chip.is-midi {
+  border-color: rgba(125, 211, 252, 0.35);
+  color: var(--serum);
+}
+
+.export-chip:active {
+  cursor: grabbing;
+}
+
+.export-drop-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.export-drop-actions .btn {
+  flex: 1 1 auto;
+  font-size: 0.75rem;
+  padding: 6px 8px;
 }
 
 /* Transport status strip: idle grey · playing breathe green · busy yellow */

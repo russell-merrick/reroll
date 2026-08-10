@@ -9,12 +9,22 @@ from typing import Any
 from .catalog import Asset, Catalog
 from .scanner import is_factory_serum
 
-# Transition / riser-style samples to optionally exclude
+# Transition / riser / build samples to optionally exclude.
+# Use non-alnum boundaries so underscores match: Snare_Build_Overcast.wav
+# (\b does NOT break on "_", so \bbuild\b misses pack-style names.)
+_TOK = r"(?<![a-z0-9])(?:{inner})(?![a-z0-9])"
 RISER_RE = re.compile(
-    r"\briser\b|\brise\b|\bbuild(?:[-_]?up)?\b|\bdownlift(?:er)?\b|\buplift(?:er)?\b|"
-    r"\bdrum[\s_-]?roll\b|\bsnare[\s_-]?roll\b|\btom[\s_-]?roll\b|"
-    r"\bwhoosh\b|\bsweep\b|\bfall(?:er)?\b|\bdescend\b|"
-    r"\briser|downlifter|uplifter|buildup|build_up|drumroll|snareroll",
+    "|".join(
+        [
+            _TOK.format(
+                inner=r"riser|rise|build(?:[-_]?ups?)?|builds?|"
+                r"downlift(?:er)?s?|uplift(?:er)?s?|"
+                r"drum[\s_-]?rolls?|snare[\s_-]?rolls?|tom[\s_-]?rolls?|"
+                r"whoosh(?:es)?|sweeps?|fall(?:er)?s?|descends?"
+            ),
+            r"build[_-]?ups?|drumrolls?|snarerolls?",
+        ]
+    ),
     re.I,
 )
 

@@ -1,5 +1,5 @@
 """
-Austin Russell Loop Machine — FastAPI backend.
+Reroll — By Austin Russell. FastAPI backend.
 
 Run from project root:
   python -m uvicorn backend.app:app --reload --host 127.0.0.1 --port 8000
@@ -30,7 +30,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .catalog import CATALOG
+from .export_loop import export_loop
 from .generate import generate_loop, generate_tracks, reroll_slot
+from .persist import catalog_stats, default_db_path, load_catalog, save_catalog
 from .scanner import scan_library
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,6 +47,7 @@ EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 SAVES_DIR = ROOT / "saves"
 SAVES_DIR.mkdir(parents=True, exist_ok=True)
 SETTINGS_PATH = ROOT / "user_settings.json"
+LIBRARY_DB = default_db_path(ROOT)
 
 AUDIO_MEDIA = {
     ".wav": "audio/wav",
@@ -55,7 +58,7 @@ AUDIO_MEDIA = {
     ".ogg": "audio/ogg",
 }
 
-app = FastAPI(title="Austin Russell Loop Machine", version="0.1.0")
+app = FastAPI(title="Reroll", version="0.1.0")
 
 
 class GenerateRequest(BaseModel):
@@ -126,6 +129,36 @@ class SaveLoopRequest(BaseModel):
     track_order: list[str] = Field(default_factory=list)
     slots: dict[str, Any] = Field(default_factory=dict)
     id: str | None = None  # overwrite existing if provided
+
+
+class ExportTrack(BaseModel):
+    id: str
+    type: str = "track"
+    path: str | None = None
+    name: str | None = None
+    kind: str | None = None
+    midi: dict[str, Any] | None = None
+    macros: list[float] | None = None
+
+
+class ExportRequest(BaseModel):
+    """Export current session into exports/<stamp>_name/ for Ableton."""
+
+    name: str | None = None
+    bpm: float = 140
+    key: str = "F minor"
+    style: str = "Techno"
+    bars: int = 4
+    tracks: list[ExportTrack] = Field(default_factory=list)
+    # Default false — UI shows drag tray into the open Live set instead
+    open_folder: bool = False
+
+
+class ExportSelectRequest(BaseModel):
+    """Open Explorer with these absolute paths selected (multi-drag into Live)."""
+
+    paths: list[str] = Field(default_factory=list)
+    folder: str | None = None
 
 
 class UserSettings(BaseModel):
@@ -234,7 +267,21 @@ def _known_paths() -> set[str]:
 
 @app.on_event("startup")
 def startup_scan() -> None:
-    scan_library(CATALOG)
+    # Prefer SQLite catalog when present (fast boot); else full disk scan + save
+    loaded = load_catalog(LIBRARY_DB)
+    if loaded is not None and (loaded.samples or loaded.serum):
+        CATALOG.samples = loaded.samples
+        CATALOG.serum = loaded.serum
+        CATALOG.sample_roots = loaded.sample_roots
+        CATALOG.serum_roots = loaded.serum_roots
+        CATALOG.scanned = True
+        CATALOG.last_error = None
+    else:
+        scan_library(CATALOG)
+        try:
+            save_catalog(CATALOG, LIBRARY_DB)
+        except OSError:
+            pass
 
     def _warm_serum_worker() -> None:
         try:
@@ -252,13 +299,21 @@ def health() -> dict[str, str]:
 
 @app.get("/api/library")
 def library_summary() -> dict[str, Any]:
-    return CATALOG.summary()
+    summary = CATALOG.summary()
+    summary["db"] = catalog_stats(LIBRARY_DB)
+    return summary
 
 
 @app.post("/api/scan")
 def rescan() -> dict[str, Any]:
     scan_library(CATALOG)
-    return CATALOG.summary()
+    try:
+        db_info = save_catalog(CATALOG, LIBRARY_DB)
+    except OSError as exc:
+        db_info = {"ok": False, "error": str(exc)}
+    summary = CATALOG.summary()
+    summary["db"] = db_info
+    return summary
 
 
 @app.get("/api/samples")
@@ -733,13 +788,72 @@ def serum_open_editor(body: SerumOpenRequest) -> dict[str, Any]:
     }
 
 
+def _enrich_serum2_macro_names(result: dict[str, Any], fxp: str) -> dict[str, Any]:
+    """
+    Overlay Macro0..7 display names from the .SerumPreset file.
+
+    VST3 get_parameter_name is almost always "Macro N". Real labels live in the
+    preset CBOR. The warm host worker can also serve *stale* code after edits, so
+    we re-apply names here via a fresh Python 3.12 import (no VST load).
+    """
+    if not result.get("ok"):
+        return result
+    path = Path(fxp)
+    if path.suffix.lower() != ".serumpreset":
+        return result
+    py = _find_py312()
+    if not py:
+        return result
+    macros_in = result.get("all_macros") or result.get("macros") or []
+    if not isinstance(macros_in, list):
+        macros_in = []
+    try:
+        proc = subprocess.run(
+            [
+                *py[0],
+                "-c",
+                "import json,sys; sys.path.insert(0, sys.argv[1]); "
+                "from host.renderer import apply_serum2_preset_macro_labels; "
+                "req=json.load(sys.stdin); "
+                "out=apply_serum2_preset_macro_labels(req.get('macros') or [], req['fxp']); "
+                "print(json.dumps(out))",
+                str(ROOT),
+            ],
+            input=json.dumps({"fxp": str(path.resolve()), "macros": macros_in}),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            cwd=str(ROOT),
+            check=False,
+        )
+        if proc.returncode != 0:
+            return result
+        lines = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()]
+        if not lines:
+            return result
+        out = json.loads(lines[-1])
+        if not isinstance(out, list) or not out:
+            return result
+        result = dict(result)
+        result["all_macros"] = out
+        result["macros"] = [m for m in out if m.get("mapped")]
+        result["mapped_count"] = len(result["macros"])
+        result["names_from_preset"] = True
+        return result
+    except Exception:
+        return result
+
+
 @app.post("/api/serum/macros")
 def serum_macros(body: SerumMacrosRequest) -> dict[str, Any]:
-    """Read MACRO 1–4 defaults from a .fxp (after load)."""
-    _assert_fxp_allowed(body.fxp)
-    result = _run_host_cli({"action": "macros", "fxp": body.fxp}, timeout=60)
+    """Read macro knobs (+ Serum 2 custom names from the preset file)."""
+    fxp_path = str(_assert_fxp_allowed(body.fxp).resolve())
+    result = _run_host_cli({"action": "macros", "fxp": fxp_path}, timeout=60)
     if not result.get("ok"):
         raise HTTPException(status_code=500, detail=result.get("error", "macro inspect failed"))
+    result = _enrich_serum2_macro_names(result, fxp_path)
     return result
 
 
@@ -812,6 +926,15 @@ def export_path() -> dict[str, Any]:
     return {"ok": True, "path": str(EXPORT_DIR.resolve())}
 
 
+def _open_folder(path: str) -> None:
+    if sys.platform == "win32":
+        os.startfile(path)  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
 @app.post("/api/export/open")
 def export_open_folder() -> dict[str, Any]:
     """Open the export folder in the OS file manager (Explorer on Windows)."""
@@ -820,16 +943,217 @@ def export_open_folder() -> dict[str, Any]:
     (EXPORT_DIR / "midi").mkdir(parents=True, exist_ok=True)
     path = str(EXPORT_DIR.resolve())
     try:
-        if sys.platform == "win32":
-            # os.startfile opens Explorer without a hanging console process
-            os.startfile(path)  # type: ignore[attr-defined]
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", path])
-        else:
-            subprocess.Popen(["xdg-open", path])
+        _open_folder(path)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Could not open folder: {exc}") from exc
     return {"ok": True, "path": path}
+
+
+def _allowed_export_file(path: str | Path) -> Path:
+    """Only serve files under exports/ or Ableton User Library / Reroll."""
+    p = Path(path).expanduser().resolve()
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    allowed_roots = [EXPORT_DIR.resolve()]
+    try:
+        from .export_loop import ableton_user_library_samples
+
+        ul = ableton_user_library_samples()
+        if ul is not None:
+            allowed_roots.append((ul / "Reroll").resolve())
+    except Exception:
+        pass
+    pl = str(p).lower()
+    if not any(pl.startswith(str(root).lower()) for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="path not allowed")
+    return p
+
+
+@app.get("/api/export/file")
+def export_serve_file(path: str = Query(..., description="Absolute path under exports/")):
+    """Serve an exported clip for browser → Ableton drag (DownloadURL / File)."""
+    file_path = _allowed_export_file(path)
+    ext = file_path.suffix.lower()
+    media = {
+        ".wav": "audio/wav",
+        ".aif": "audio/aiff",
+        ".aiff": "audio/aiff",
+        ".flac": "audio/flac",
+        ".mp3": "audio/mpeg",
+        ".mid": "audio/midi",
+        ".midi": "audio/midi",
+    }.get(ext, "application/octet-stream")
+    return FileResponse(
+        path=str(file_path),
+        media_type=media,
+        filename=file_path.name,
+        headers={
+            "Cache-Control": "no-store",
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+
+
+@app.post("/api/export/select")
+def export_select_in_explorer(body: ExportSelectRequest) -> dict[str, Any]:
+    """
+    Open Explorer with the given files multi-selected so you can drag the
+    whole selection into an open Ableton Live set in one gesture (Windows).
+    """
+    paths: list[Path] = []
+    if body.paths:
+        for raw in body.paths:
+            try:
+                paths.append(_allowed_export_file(raw))
+            except HTTPException:
+                continue
+    elif body.folder:
+        folder = Path(body.folder).expanduser().resolve()
+        export_root = EXPORT_DIR.resolve()
+        if not str(folder).lower().startswith(str(export_root).lower()):
+            raise HTTPException(status_code=403, detail="folder not allowed")
+        if folder.is_dir():
+            paths = sorted(
+                p
+                for p in folder.iterdir()
+                if p.is_file() and p.suffix.lower() in {
+                    ".wav", ".aif", ".aiff", ".flac", ".mp3", ".mid", ".midi"
+                }
+            )
+    if not paths:
+        raise HTTPException(status_code=400, detail="no selectable files")
+
+    if sys.platform == "win32":
+        ok = _win_select_files(paths)
+        if not ok:
+            # Fallback: just open the parent folder
+            try:
+                _open_folder(str(paths[0].parent))
+            except OSError as exc:
+                raise HTTPException(
+                    status_code=500, detail=f"Could not open Explorer: {exc}"
+                ) from exc
+            return {
+                "ok": True,
+                "selected": 0,
+                "folder": str(paths[0].parent),
+                "note": "Opened folder (multi-select unavailable)",
+            }
+        return {
+            "ok": True,
+            "selected": len(paths),
+            "folder": str(paths[0].parent),
+        }
+
+    # macOS / Linux: open parent folder
+    try:
+        _open_folder(str(paths[0].parent))
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"ok": True, "selected": 0, "folder": str(paths[0].parent)}
+
+
+def _win_select_files(paths: list[Path]) -> bool:
+    """SHOpenFolderAndSelectItems — Explorer with multiple files selected."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        shell32 = ctypes.windll.shell32  # type: ignore[attr-defined]
+        ole32 = ctypes.windll.ole32  # type: ignore[attr-defined]
+
+        # PIDL from path
+        ILCreateFromPathW = shell32.ILCreateFromPathW
+        ILCreateFromPathW.argtypes = [wintypes.LPCWSTR]
+        ILCreateFromPathW.restype = ctypes.c_void_p
+
+        ILFree = shell32.ILFree
+        ILFree.argtypes = [ctypes.c_void_p]
+
+        SHOpenFolderAndSelectItems = shell32.SHOpenFolderAndSelectItems
+        SHOpenFolderAndSelectItems.argtypes = [
+            ctypes.c_void_p,
+            wintypes.UINT,
+            ctypes.POINTER(ctypes.c_void_p),
+            wintypes.DWORD,
+        ]
+        SHOpenFolderAndSelectItems.restype = ctypes.HRESULT
+
+        ole32.CoInitialize(None)
+        folder_pidl = ILCreateFromPathW(str(paths[0].parent))
+        if not folder_pidl:
+            return False
+        child_pidls = []
+        try:
+            for p in paths:
+                pidl = ILCreateFromPathW(str(p))
+                if pidl:
+                    child_pidls.append(pidl)
+            if not child_pidls:
+                return False
+            arr = (ctypes.c_void_p * len(child_pidls))(*child_pidls)
+            hr = SHOpenFolderAndSelectItems(
+                folder_pidl, len(child_pidls), arr, 0
+            )
+            return hr == 0
+        finally:
+            for pidl in child_pidls:
+                ILFree(pidl)
+            ILFree(folder_pidl)
+    except Exception:
+        return False
+
+
+@app.post("/api/export")
+def export_current_loop(body: ExportRequest) -> dict[str, Any]:
+    """
+    Export the current session into exports/<timestamp>_<name>/ (flat files),
+    mirror to ABLETON_DROP + Ableton User Library / Reroll when possible.
+    """
+    if not body.tracks:
+        raise HTTPException(status_code=400, detail="No tracks to export")
+
+    def render_serum(payload: dict[str, Any]) -> dict[str, Any]:
+        if payload.get("fxp"):
+            try:
+                _assert_fxp_allowed(str(payload["fxp"]))
+            except HTTPException as exc:
+                return {"ok": False, "error": str(exc.detail)}
+        try:
+            return _run_host_cli(payload, timeout=120)
+        except HTTPException as exc:
+            return {"ok": False, "error": str(exc.detail)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    tracks = [t.model_dump() for t in body.tracks]
+    try:
+        manifest = export_loop(
+            export_root=EXPORT_DIR,
+            bpm=body.bpm,
+            key=body.key,
+            style=body.style,
+            bars=body.bars,
+            tracks=tracks,
+            name=body.name,
+            render_serum=render_serum,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
+
+    # Attach browser-fetchable URLs for drag-and-drop
+    for f in manifest.get("files") or []:
+        abs_path = f.get("abs_path")
+        if abs_path:
+            f["url"] = f"/api/export/file?path={abs_path}"
+
+    folder = manifest.get("folder")
+    if body.open_folder and folder:
+        try:
+            _open_folder(str(folder))
+        except OSError:
+            pass
+    return manifest
 
 
 def _slug_name(name: str) -> str:

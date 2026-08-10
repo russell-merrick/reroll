@@ -1,5 +1,5 @@
 /**
- * Austin Russell Loop Machine — FastAPI client + Web Audio preview.
+ * Reroll — By Austin Russell. FastAPI client + Web Audio preview.
  * Open via http://127.0.0.1:8000 (not file://).
  */
 
@@ -2800,8 +2800,16 @@ async function loadUserSettings() {
   return s;
 }
 
-async function doGenerate() {
-  stopAll();
+/**
+ * Fill unlocked tracks from the library.
+ * @param {{ autoPlay?: boolean }} [opts]
+ *  - autoPlay (default true): after generate, start or restart the loop
+ *    (keep going if already playing; start if stopped). Init/options use false.
+ */
+async function doGenerate(opts = {}) {
+  const autoPlay = opts.autoPlay !== false;
+  // Don't stopAll() first — if already playing, old audio continues during the
+  // network round-trip; playLoop() soft-resets when it reloads stems.
   const eng = getSerumEngine();
   if (eng === "none") {
     setStatus("Options · enable Serum 1 and/or Serum 2 for synth tracks");
@@ -2844,9 +2852,23 @@ async function doGenerate() {
       applySlot(role, { ...state.slots[role], locked });
     }
   }
-  setStatus(
-    `Generated · ${loop.bpm} BPM · ${loop.key} · ${loop.style} · ${serumEngineLabel(eng)} — press Play`
-  );
+  const summary = `Generated · ${loop.bpm} BPM · ${loop.key} · ${loop.style} · ${serumEngineLabel(eng)}`;
+  if (!autoPlay) {
+    setStatus(`${summary} — press Play`);
+    return;
+  }
+  setStatus(`${summary} · starting…`);
+  isPlayPending = true;
+  updatePlayButton();
+  try {
+    await playLoop();
+  } catch (e) {
+    isPlayPending = false;
+    isPlaying = false;
+    updatePlayButton();
+    setStatus(`${summary} · play failed: ${e.message || e}`);
+    throw e;
+  }
 }
 
 async function doReroll(role) {
@@ -3752,8 +3774,8 @@ function buildSlotElement(id, type) {
       <button type="button" class="icon-btn mute" data-tip="Mute / unmute" aria-pressed="false" aria-label="Mute">🔊</button>
       <button type="button" class="icon-btn solo" data-tip="Solo this track" aria-pressed="false" aria-label="Solo">S</button>
       <button type="button" class="icon-btn lock" data-tip="Lock — keep on Generate" aria-pressed="false" aria-label="Lock">🔓</button>
-      <button type="button" class="icon-btn dice" data-tip="Reroll this track" aria-label="Reroll">🎲</button>
       <button type="button" class="icon-btn delete" data-tip="Remove track from stack" aria-label="Delete track">🗑️</button>
+      <button type="button" class="icon-btn dice" data-tip="Reroll this track" aria-label="Reroll">🎲</button>
     </div>
   `;
   return art;
@@ -3909,7 +3931,9 @@ function renderInstrumentCheckboxes() {
       // Rebuild stack when idle so defaults are immediately usable
       if (!isPlaying && !isPlayPending) {
         initDefaultTracks();
-        doGenerate().catch((e) => setStatus(`Generate failed: ${e.message}`));
+        doGenerate({ autoPlay: false }).catch((e) =>
+          setStatus(`Generate failed: ${e.message}`)
+        );
       }
     });
     host.appendChild(lab);
@@ -4469,8 +4493,8 @@ function initUiChrome() {
     state.options.filterRisers = Boolean(ev.target.checked);
     setStatus(
       state.options.filterRisers
-        ? "Options · filter risers ON"
-        : "Options · filter risers OFF"
+        ? "Options · filter risers/builds ON"
+        : "Options · filter risers/builds OFF"
     );
     scheduleSaveUserSettings({ immediate: true });
   });
@@ -4578,14 +4602,315 @@ function initUiChrome() {
   $("#btn-rescan")?.addEventListener("click", () => {
     doScan().catch((e) => setStatus(`Scan failed: ${e.message}`));
   });
-  $("#btn-export")?.addEventListener("click", () => {
-    setStatus("Export not implemented yet");
+  $("#btn-export-panel")?.addEventListener("click", () => {
+    doExportLoop().catch((e) => setStatus(`Export failed: ${e.message || e}`));
   });
   $("#btn-open-export")?.addEventListener("click", () => {
     api("/api/export/open", { method: "POST", body: "{}" })
       .then((r) => setStatus(`Opened export folder · ${r.path || "exports"}`))
       .catch((e) => setStatus(`Open folder failed: ${e.message}`));
   });
+  $("#btn-export-select")?.addEventListener("click", () => {
+    selectExportInExplorer().catch((e) =>
+      setStatus(`Select in Explorer failed: ${e.message || e}`)
+    );
+  });
+  bindExportDragAll();
+}
+
+/** @type {{ files: object[], folder: string|null, dropFolder: string|null } | null} */
+let lastExport = null;
+/** @type {File[]} */
+let exportDragFiles = [];
+
+/**
+ * Export current session → flat files + drag tray for Ableton.
+ * Also mirrors to ABLETON_DROP and Live User Library / Reroll.
+ */
+async function doExportLoop() {
+  const ids = activeTrackIds();
+  if (!ids.length) {
+    setStatus("Nothing to export — add tracks first");
+    return;
+  }
+  const tracks = ids.map((id) => {
+    const s = state.slots[id] || {};
+    const out = {
+      id,
+      type: baseType(id),
+      path: s.path || null,
+      name: s.name || id,
+      kind: s.kind || null,
+    };
+    if (s.midi?.grid) {
+      out.midi = {
+        patternId: s.midi.patternId,
+        octave: s.midi.octave ?? 3,
+        key: s.midi.key || $("#key")?.value || "F minor",
+        grid: s.midi.grid.map((c) => (c ? { ...c } : null)),
+      };
+    }
+    if (Array.isArray(s.macros) && s.macros.length) {
+      out.macros = s.macros.slice(0, 8).map(max01);
+    }
+    return out;
+  });
+  const style = ($("#style")?.value || "Loop").trim() || "Loop";
+  const key = ($("#key")?.value || "F minor").trim();
+  const bpm = getBpm();
+  const name = state.currentLoopName || `${style} ${key} ${bpm}bpm`;
+
+  setStatus("Exporting… (Serum bounces may take a few seconds)");
+  beginTransportBusy("Exporting…");
+  try {
+    let result;
+    try {
+      result = await api("/api/export", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          bpm,
+          key,
+          style,
+          bars: typeof LOOP_BARS === "number" ? LOOP_BARS : 4,
+          tracks,
+          open_folder: false,
+        }),
+      });
+    } catch (e) {
+      const msg = String(e.message || e);
+      if (/404|not found/i.test(msg)) {
+        setStatus(
+          "Export API missing — restart the backend (uvicorn), hard-refresh the page, try again"
+        );
+      }
+      throw e;
+    }
+    const files = Array.isArray(result.files)
+      ? result.files
+      : [
+          ...(result.audio || []).map((a) => ({ ...a, role: "audio" })),
+          ...(result.midi || []).map((m) => ({ ...m, role: "midi" })),
+        ];
+    // Show tray immediately (don't wait on file prefetch — that was hiding the UI)
+    lastExport = {
+      files,
+      folder: result.folder || null,
+      dropFolder: result.drop_folder || null,
+      userLibrary: result.user_library_folder || null,
+    };
+    renderExportDropTray(result, files);
+    const n = files.length;
+    const errs = Array.isArray(result.errors) ? result.errors.length : 0;
+    let msg = `Ready to drag into Live · ${n} clip${n === 1 ? "" : "s"}`;
+    if (result.user_library_folder) msg += " · also in User Library → Reroll";
+    if (errs) msg += ` · ${errs} warning${errs === 1 ? "" : "s"}`;
+    setStatus(msg);
+    // Prefetch in background for smoother drag
+    prepareExportDragFiles(files)
+      .then(() => {
+        if (exportDragFiles.length) {
+          setStatus(`${msg} · drag ready`);
+        }
+      })
+      .catch(() => {});
+    return result;
+  } finally {
+    endTransportBusy();
+  }
+}
+
+function exportFileUrl(f) {
+  if (f.url) {
+    // Ensure absolute for DownloadURL
+    if (f.url.startsWith("http")) return f.url;
+    return `${window.location.origin}${f.url.startsWith("/") ? "" : "/"}${f.url}`;
+  }
+  if (f.abs_path) {
+    return `${window.location.origin}/api/export/file?path=${encodeURIComponent(f.abs_path)}`;
+  }
+  return null;
+}
+
+async function prepareExportDragFiles(files) {
+  exportDragFiles = [];
+  const list = Array.isArray(files) ? files : [];
+  for (const f of list) {
+    const url = exportFileUrl(f);
+    const name = f.name || f.file || "clip";
+    if (!url) continue;
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) continue;
+      const blob = await res.blob();
+      const mime = f.mime || blob.type || "application/octet-stream";
+      exportDragFiles.push(new File([blob], name, { type: mime }));
+    } catch (e) {
+      console.warn("export drag prefetch failed", name, e);
+    }
+  }
+}
+
+function renderExportDropTray(result, files) {
+  const panel = $("#export-drop");
+  const chips = $("#export-chips");
+  const meta = $("#export-drop-meta");
+  if (!panel || !chips) {
+    console.warn("export-drop panel missing from DOM — hard-refresh the page");
+    setStatus("Export UI missing — hard-refresh the browser (Ctrl+F5)");
+    return;
+  }
+  panel.hidden = false;
+  panel.removeAttribute("hidden");
+  panel.classList.add("is-open");
+  chips.innerHTML = "";
+  const list = Array.isArray(files) ? files : [];
+  if (meta) {
+    meta.textContent = `${list.length} file${list.length === 1 ? "" : "s"} · ${result.bpm || getBpm()} BPM`;
+  }
+  if (!list.length) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent =
+      "No files exported (empty tracks or bounce failed). Check status warnings.";
+    chips.appendChild(empty);
+  }
+  list.forEach((f, i) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className =
+      "export-chip" + (f.role === "midi" || f.kind === "midi" ? " is-midi" : "");
+    chip.draggable = true;
+    chip.textContent = f.name || f.file || `clip ${i + 1}`;
+    chip.title = "Drag into Ableton Live";
+    chip.dataset.idx = String(i);
+    chip.addEventListener("dragstart", (ev) => {
+      onExportChipDragStart(ev, i);
+    });
+    chips.appendChild(chip);
+  });
+  // Ensure side panel is visible and tray is on screen
+  try {
+    panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch {
+    /* ok */
+  }
+}
+
+function onExportChipDragStart(ev, index) {
+  const file = exportDragFiles[index];
+  const meta = lastExport?.files?.[index];
+  const dt = ev.dataTransfer;
+  if (!dt) return;
+  dt.effectAllowed = "copy";
+  try {
+    dt.clearData();
+  } catch {
+    /* ok */
+  }
+  if (file) {
+    try {
+      dt.items.add(file);
+    } catch {
+      /* older browsers */
+    }
+  }
+  // Chromium → external apps (Ableton): DownloadURL mime:name:url
+  const url = meta ? exportFileUrl(meta) : null;
+  const name = file?.name || meta?.name || "clip.wav";
+  const mime = file?.type || meta?.mime || "application/octet-stream";
+  if (url) {
+    try {
+      dt.setData("DownloadURL", `${mime}:${name}:${url}`);
+    } catch {
+      /* ok */
+    }
+    try {
+      dt.setData("text/uri-list", url);
+      dt.setData("text/plain", url);
+    } catch {
+      /* ok */
+    }
+  }
+  ev.currentTarget?.classList.add("is-dragging");
+  const clear = () => {
+    ev.currentTarget?.classList.remove("is-dragging");
+    window.removeEventListener("dragend", clear);
+  };
+  window.addEventListener("dragend", clear);
+}
+
+function bindExportDragAll() {
+  const el = $("#export-drag-all");
+  if (!el || el.dataset.bound) return;
+  el.dataset.bound = "1";
+  el.addEventListener("dragstart", (ev) => {
+    const dt = ev.dataTransfer;
+    if (!dt || !exportDragFiles.length) {
+      ev.preventDefault();
+      setStatus("Export first, then drag into Live");
+      return;
+    }
+    dt.effectAllowed = "copy";
+    try {
+      dt.clearData();
+    } catch {
+      /* ok */
+    }
+    // Prefer multi-file File list when the browser allows it
+    let added = 0;
+    for (const file of exportDragFiles) {
+      try {
+        dt.items.add(file);
+        added += 1;
+      } catch {
+        break;
+      }
+    }
+    // Also set first DownloadURL (Chromium often only honors one for OS drops)
+    const meta0 = lastExport?.files?.[0];
+    const url0 = meta0 ? exportFileUrl(meta0) : null;
+    if (url0 && exportDragFiles[0]) {
+      try {
+        dt.setData(
+          "DownloadURL",
+          `${exportDragFiles[0].type || "application/octet-stream"}:${exportDragFiles[0].name}:${url0}`
+        );
+      } catch {
+        /* ok */
+      }
+    }
+    el.classList.add("is-dragging");
+    setStatus(
+      added > 1
+        ? `Dragging ${added} clips — drop on Live Session/Arrangement`
+        : "Dragging… if Live only gets one file, use Select in Explorer"
+    );
+  });
+  el.addEventListener("dragend", () => {
+    el.classList.remove("is-dragging");
+  });
+}
+
+async function selectExportInExplorer() {
+  if (!lastExport?.files?.length) {
+    setStatus("Export first");
+    return;
+  }
+  const paths = lastExport.files.map((f) => f.abs_path).filter(Boolean);
+  const result = await api("/api/export/select", {
+    method: "POST",
+    body: JSON.stringify({
+      paths,
+      folder: lastExport.dropFolder || lastExport.folder,
+    }),
+  });
+  const n = result.selected || 0;
+  setStatus(
+    n > 0
+      ? `Explorer: ${n} files selected — drag them into Live`
+      : `Opened ${result.folder || "folder"} — select files and drag into Live`
+  );
 }
 
 async function init() {
@@ -4611,7 +4936,8 @@ async function init() {
     }
     initDefaultTracks();
     await loadLibrary();
-    await doGenerate();
+    // Initial fill only — don't autoplay (needs user gesture for AudioContext)
+    await doGenerate({ autoPlay: false });
   } catch (e) {
     setStatus(
       `Backend not reachable: ${e.message}. Run: python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000`

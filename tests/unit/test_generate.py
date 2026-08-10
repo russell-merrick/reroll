@@ -29,6 +29,23 @@ def test_riser_detection():
     assert not is_riser_like(clean)
 
 
+def test_riser_detection_underscore_build_token():
+    """Pack names use _Build_ — \\b does not split on underscore."""
+    build = make_asset(
+        path=r"C:\x\STCR2_MHPT2_126_Snare_Build_Overcast.wav",
+        name="STCR2_MHPT2_126_Snare_Build_Overcast.wav",
+        role="snare",
+    )
+    assert is_riser_like(build)
+    # "build" as substring of unrelated word should not match
+    builder = make_asset(
+        path=r"C:\x\builder_kit_hit.wav",
+        name="builder_kit_hit.wav",
+        role="perc",
+    )
+    assert not is_riser_like(builder)
+
+
 def test_filter_serum_engine(sample_catalog: Catalog):
     pool = list(sample_catalog.serum)
     s1 = _filter_serum_engine(pool, "s1")

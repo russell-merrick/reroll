@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Austin Russell Loop Machine</title>
+  <title>Reroll — By Austin Russell</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -23,14 +23,13 @@
           </svg>
         </a>
         <div>
-          <h1>Austin Russell Loop Machine</h1>
-          <p class="tagline">Your collection, infinite ideas</p>
+          <h1>Reroll</h1>
+          <p class="tagline">By Austin Russell · Your collection, infinite ideas</p>
         </div>
       </div>
       <div class="topbar-actions">
         <button type="button" class="btn ghost" id="btn-my-loops" data-tip="Browse and load saved loops">My Loops</button>
         <button type="button" class="btn ghost" id="btn-library" data-tip="Library roots &amp; scan paths">Library</button>
-        <button type="button" class="btn ghost" id="btn-export" data-tip="Export this loop for Ableton (not implemented yet)">Export</button>
       </div>
     </header>
 
@@ -67,7 +66,7 @@
           <option value="Peak Time" />
         </datalist>
       </label>
-      <button type="button" class="btn primary big" id="btn-generate" data-tip="Fill unlocked slots with random samples &amp; Serum presets from your library">Generate</button>
+      <button type="button" class="btn primary big" id="btn-generate" data-tip="Fill unlocked slots with random samples &amp; Serum presets from your library">🎲 Generate</button>
     </section>
 
     <!-- Full-width loop waveform + playhead (above Loop) -->
@@ -108,9 +107,9 @@
             <span class="options-label"><strong>Filter out factory presets</strong></span>
           </label>
         </div>
-        <label class="options-row" data-tip="Skip builds, risers, downlifters, uplifters, drum rolls, snare rolls, sweeps">
+        <label class="options-row" data-tip="Skip risers, builds/buildups, downlifters, uplifters, drum/snare rolls, sweeps, whooshes">
           <input type="checkbox" id="opt-filter-risers" checked />
-          <span class="options-label"><strong>Filter out risers</strong></span>
+          <span class="options-label"><strong>Filter out risers/builds</strong></span>
         </label>
       </section>
 
@@ -181,17 +180,33 @@
             </div>
             <span class="status-bar-label" id="status-bar-label">Idle</span>
           </div>
-          <p class="hint">Drums = samples. Bass/lead = real Serum bounce when host is ready (else JS synth). First play may take a few seconds. Solo/mute live. <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo · <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo.</p>
+          <p class="hint">
+            <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo<br />
+            <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo
+          </p>
         </section>
 
         <section class="panel export-panel">
           <h2>Ableton</h2>
-          <ol class="steps">
-            <li>Export loop folder</li>
-            <li>Drag <code>audio/</code> + <code>midi/</code> into Live</li>
-            <li>Produce</li>
-          </ol>
-          <button type="button" class="btn primary wide" id="btn-open-export" data-tip="Open exports/ in File Explorer">Open export folder</button>
+          <p class="hint" style="margin-bottom:10px">
+            Export once, then <strong>drag chips into your open Live set</strong>
+            (or grab them from Live’s browser → User Library → Samples → Reroll).
+          </p>
+          <button type="button" class="btn primary wide" id="btn-export-panel" data-tip="Bounce stems + MIDI, then drag into Live">Export for Ableton</button>
+          <div class="export-drop" id="export-drop" hidden>
+            <div class="export-drop-head">
+              <strong>Drag into Live</strong>
+              <span class="export-drop-meta" id="export-drop-meta"></span>
+            </div>
+            <div class="export-drag-all" id="export-drag-all" draggable="true" title="Drag all clips into Ableton">
+              ⠿ Drag all into Ableton
+            </div>
+            <div class="export-chips" id="export-chips"></div>
+            <div class="export-drop-actions">
+              <button type="button" class="btn ghost" id="btn-export-select" data-tip="Open Explorer with all files selected — then drag into Live">Select in Explorer</button>
+              <button type="button" class="btn ghost" id="btn-open-export" data-tip="Open exports/ root folder">Open folder</button>
+            </div>
+          </div>
         </section>
 
         <section class="panel library-panel" id="library-panel">

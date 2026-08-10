@@ -1,5 +1,7 @@
 # --- User prefs & local data (machine-specific) ---
 user_settings.json
+library.db
+library.db-*
 saves/*
 !saves/.gitkeep
 exports/**
@@ -8,6 +10,7 @@ exports/**
 !exports/audio/.gitkeep
 !exports/midi/
 !exports/midi/.gitkeep
+# Keep folder stubs only — per-session export folders stay local
 
 # --- Serum host bounce cache (generated WAVs / state) ---
 host/cache/*

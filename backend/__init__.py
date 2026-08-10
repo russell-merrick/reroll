@@ -1,1 +1,1 @@
-"""Austin Russell Loop Machine backend."""
+"""Reroll backend."""

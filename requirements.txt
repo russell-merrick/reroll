@@ -1,4 +1,4 @@
-# Personal AI Loop Generator — main app (Python 3.14 OK)
+# Reroll — main app (Python 3.11+ / 3.14 OK)
 # V0: no database. Scan → classify → generate → preview → export.
 
 # Web API + static UI host
