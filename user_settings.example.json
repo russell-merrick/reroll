@@ -1,0 +1,23 @@
+{
+  "bpm": 140,
+  "key": "F minor",
+  "style": "Techno",
+  "filterRisers": true,
+  "filterFactorySerum": false,
+  "serum1": true,
+  "serum2": true,
+  "instruments": {
+    "kick": true,
+    "hats": true,
+    "clap": true,
+    "lead_audio": true,
+    "bass": true,
+    "brass": false,
+    "chorus": false,
+    "pads": false,
+    "vocals": false,
+    "guitar": false,
+    "keys": false,
+    "strings": false
+  }
+}

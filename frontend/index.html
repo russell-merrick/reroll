@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Austin Russell Loop Machine</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <a
+          class="spotify-link"
+          href="https://open.spotify.com/artist/5HtbakUgucKxyER3RhpiYi?si=UHjckOMKTEGCUBVcg8cISg"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-tip="Austin Russell on Spotify"
+          aria-label="Austin Russell on Spotify"
+        >
+          <svg class="spotify-logo" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/>
+          </svg>
+        </a>
+        <div>
+          <h1>Austin Russell Loop Machine</h1>
+          <p class="tagline">Your collection, infinite ideas</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button type="button" class="btn ghost" id="btn-my-loops" data-tip="Browse and load saved loops">My Loops</button>
+        <button type="button" class="btn ghost" id="btn-library" data-tip="Library roots &amp; scan paths">Library</button>
+        <button type="button" class="btn ghost" id="btn-export" data-tip="Export this loop for Ableton (not implemented yet)">Export</button>
+      </div>
+    </header>
+
+    <!-- Session controls -->
+    <section class="session" aria-label="Session">
+      <label class="field">
+        <span>BPM</span>
+        <input type="number" id="bpm" value="140" min="60" max="200" step="1" />
+      </label>
+      <label class="field">
+        <span>Key</span>
+        <select id="key">
+          <option>A minor</option>
+          <option>C minor</option>
+          <option selected>F minor</option>
+          <option>G minor</option>
+          <option>D minor</option>
+          <option>E minor</option>
+          <option>A major</option>
+          <option>C major</option>
+          <option>F major</option>
+          <option>G major</option>
+        </select>
+      </label>
+      <label class="field grow">
+        <span>Style</span>
+        <input type="text" id="style" value="Techno" list="style-presets" placeholder="Techno, Melodic Techno…" />
+        <datalist id="style-presets">
+          <option value="Techno" />
+          <option value="Melodic Techno" />
+          <option value="Hard Techno" />
+          <option value="Tech House" />
+          <option value="Trance" />
+          <option value="Peak Time" />
+        </datalist>
+      </label>
+      <button type="button" class="btn primary big" id="btn-generate" data-tip="Fill unlocked slots with random samples &amp; Serum presets from your library">Generate</button>
+    </section>
+
+    <!-- Full-width loop waveform + playhead (above Loop) -->
+    <section class="wave-overview" id="wave-overview" aria-label="Loop waveform">
+      <div class="wave-overview-head">
+        <h2>Waveform</h2>
+        <span class="wave-overview-meta" id="wave-meta">Idle · play to build</span>
+      </div>
+      <div class="wave-canvas-wrap">
+        <canvas id="wave-canvas" width="1100" height="96" aria-hidden="true"></canvas>
+      </div>
+    </section>
+
+    <main class="main">
+      <div class="main-left">
+      <!-- Options (inline above loop, not a popup) -->
+      <section class="options-panel" id="options-panel" hidden aria-label="Options">
+        <div class="options-head">
+          <h2>Options</h2>
+          <button type="button" class="btn ghost" id="btn-options-close" data-tip="Hide options">Close</button>
+        </div>
+        <div class="options-group">
+          <div class="options-group-title" data-tip="Tracks created on load / when you apply defaults. Checked = included in the default loop stack.">Default instruments</div>
+          <div class="options-instruments" id="opt-instruments" role="group" aria-label="Default instruments"></div>
+        </div>
+        <div class="options-group">
+          <div class="options-group-title" data-tip="Which engines Generate / dice can pull presets from (global for all Serum tracks)">Serum library</div>
+          <label class="options-row" data-tip="Include Serum 1 (.fxp) presets when generating or dicing synth tracks">
+            <input type="checkbox" id="opt-serum1" checked />
+            <span class="options-label"><strong>Serum 1</strong></span>
+          </label>
+          <label class="options-row" data-tip="Include Serum 2 (.SerumPreset) presets when generating or dicing synth tracks">
+            <input type="checkbox" id="opt-serum2" checked />
+            <span class="options-label"><strong>Serum 2</strong></span>
+          </label>
+          <label class="options-row" data-tip="Skip stock banks (Serum 1 factory categories, Serum 2 Factory + S1 Presets). Only Splice and User presets remain.">
+            <input type="checkbox" id="opt-filter-factory-serum" />
+            <span class="options-label"><strong>Filter out factory presets</strong></span>
+          </label>
+        </div>
+        <label class="options-row" data-tip="Skip builds, risers, downlifters, uplifters, drum rolls, snare rolls, sweeps">
+          <input type="checkbox" id="opt-filter-risers" checked />
+          <span class="options-label"><strong>Filter out risers</strong></span>
+        </label>
+      </section>
+
+      <!-- Slots -->
+      <section class="slots" aria-label="Loop slots">
+        <div class="section-head">
+          <h2>Loop</h2>
+        </div>
+
+        <div class="slot-list" id="slot-list">
+          <!-- tracks built by app.js -->
+        </div>
+        <div class="add-track-row">
+          <button type="button" class="btn add-track-btn" id="btn-add-track" data-tip="Add a track to the stack">
+            <span class="add-track-plus" aria-hidden="true">+</span>
+            <span>Add track</span>
+          </button>
+          <select id="add-track-type" class="add-track-type" aria-label="New track type" data-tip="Type for the new track">
+            <option value="kick">Kick</option>
+            <option value="clap">Clap</option>
+            <option value="hats">Hats</option>
+            <option value="perc">Perc</option>
+            <option value="fx">FX</option>
+            <option value="vocal">Vocals</option>
+            <option value="lead_audio">Lead (audio)</option>
+            <option value="bass" selected>Bass (Serum)</option>
+            <option value="lead">Lead (Serum)</option>
+            <option value="brass">Brass (Serum)</option>
+            <option value="chorus">Chorus (Serum)</option>
+            <option value="pad">Pad (Serum)</option>
+            <option value="guitar">Guitar (Serum)</option>
+            <option value="keys">Keys (Serum)</option>
+            <option value="strings">Strings (Serum)</option>
+            <option value="arp">Arp (Serum)</option>
+            <option value="pluck">Pluck (Serum)</option>
+            <option value="seq">Seq (Serum)</option>
+            <option value="synth">Synth (Serum)</option>
+            <option value="hoover">Hoover (Serum)</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- Stacked MIDI editors (one per open Serum track) -->
+      <div class="midi-editors" id="midi-editors" aria-label="MIDI editors"></div>
+      </div><!-- /.main-left -->
+
+      <!-- Side panel -->
+      <aside class="side">
+        <section class="panel transport">
+          <h2>Preview</h2>
+          <div class="transport-row">
+            <button type="button" class="btn primary" id="btn-play" aria-pressed="false" data-tip="Play / stop loop (Space) · BPM live"><span class="emoji-play" aria-hidden="true">▶</span> Play</button>
+            <button type="button" class="btn ghost" id="btn-shuffle" data-tip="Shuffle all unlocked tracks (locked stay put)">🔀 Shuffle</button>
+          </div>
+          <div class="transport-row transport-row-secondary">
+            <button type="button" class="btn ghost" id="btn-options" data-tip="Show or hide options" aria-expanded="false">Options</button>
+            <button type="button" class="btn ghost" id="btn-save" data-tip="Save this loop with a name (load later from My Loops)">💾 Save</button>
+          </div>
+          <div
+            class="status-bar is-idle"
+            id="status-bar"
+            role="status"
+            aria-live="polite"
+            data-tip="Grey idle · green playing · yellow rendering"
+          >
+            <div class="status-bar-track">
+              <div class="status-bar-fill"></div>
+            </div>
+            <span class="status-bar-label" id="status-bar-label">Idle</span>
+          </div>
+          <p class="hint">Drums = samples. Bass/lead = real Serum bounce when host is ready (else JS synth). First play may take a few seconds. Solo/mute live. <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo · <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo.</p>
+        </section>
+
+        <section class="panel export-panel">
+          <h2>Ableton</h2>
+          <ol class="steps">
+            <li>Export loop folder</li>
+            <li>Drag <code>audio/</code> + <code>midi/</code> into Live</li>
+            <li>Produce</li>
+          </ol>
+          <button type="button" class="btn primary wide" id="btn-open-export" data-tip="Open exports/ in File Explorer">Open export folder</button>
+        </section>
+
+        <section class="panel library-panel" id="library-panel">
+          <h2>Library</h2>
+          <div class="lib-stats">
+            <div><strong id="stat-samples">508</strong><span>samples</span></div>
+            <div><strong id="stat-serum">472</strong><span>Serum</span></div>
+            <div><strong id="stat-packs">313</strong><span>packs</span></div>
+          </div>
+          <ul class="role-counts" id="role-counts">
+            <li><span>kick</span><b>61</b></li>
+            <li><span>snare</span><b>42</b></li>
+            <li><span>clap</span><b>27</b></li>
+            <li><span>hat</span><b>68</b></li>
+            <li><span>bass</span><b>29</b></li>
+            <li><span>fx</span><b>78</b></li>
+            <li><span>vocal</span><b>75</b></li>
+            <li><span>loop</span><b>119</b></li>
+            <li><span>synth</span><b>73</b></li>
+            <li><span>unknown</span><b>—</b></li>
+          </ul>
+          <p class="path mono">C:\Users\russe\Documents\Splice\Samples\packs</p>
+          <p class="path mono">C:\Users\russe\Documents\Xfer\Serum Presets\Presets</p>
+          <p class="path mono">C:\Users\russe\Documents\Xfer\Serum 2 Presets\Presets</p>
+          <button type="button" class="btn ghost wide" id="btn-rescan" data-tip="Rescan sample &amp; Serum folders into memory">Rescan (in memory)</button>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="footer">
+      <span class="footer-tip" id="tip">Hover a control for help</span>
+      <span id="status">Connecting to backend…</span>
+    </footer>
+  </div>
+
+  <!-- Library drawer (design only) -->
+  <dialog id="library-dialog">
+    <form method="dialog" class="dialog-card">
+      <h2>Library roots</h2>
+      <p class="hint">Add folders to scan. Nothing is uploaded. Catalog stays in memory until rescan.</p>
+      <label class="field block">
+        <span>Sample root</span>
+        <input type="text" value="C:\Users\russe\Documents\Splice\Samples\packs" readonly />
+      </label>
+      <label class="field block">
+        <span>Serum 1 root</span>
+        <input type="text" value="C:\Users\russe\Documents\Xfer\Serum Presets\Presets" readonly />
+      </label>
+      <label class="field block">
+        <span>Serum 2 root</span>
+        <input type="text" value="C:\Users\russe\Documents\Xfer\Serum 2 Presets\Presets" readonly />
+      </label>
+      <div class="dialog-actions">
+        <button type="submit" class="btn ghost" data-tip="Close library dialog">Close</button>
+        <button type="button" class="btn primary" id="dialog-scan" data-tip="Scan library roots now">Scan</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Name loop before save -->
+  <dialog id="save-dialog">
+    <form method="dialog" class="dialog-card" id="save-form">
+      <h2>Save loop</h2>
+      <p class="hint">Name this idea so you can reload it from My Loops.</p>
+      <label class="field block">
+        <span>Name</span>
+        <input type="text" id="save-name" maxlength="80" placeholder="e.g. Fmin techno groove" autocomplete="off" required />
+      </label>
+      <div class="dialog-actions">
+        <button type="button" class="btn ghost" id="save-cancel" data-tip="Cancel save">Cancel</button>
+        <button type="submit" class="btn primary" id="save-confirm" data-tip="Save loop to disk">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Browse / load / delete saved loops -->
+  <dialog id="loops-dialog">
+    <div class="dialog-card dialog-card-wide">
+      <div class="dialog-head">
+        <h2>My Loops</h2>
+        <button type="button" class="btn ghost" id="loops-close" data-tip="Close">Close</button>
+      </div>
+      <p class="hint">Saved locally under <code>saves/</code>. Load replaces the current track stack.</p>
+      <div class="loops-list" id="loops-list" role="list"></div>
+      <p class="loops-empty hint" id="loops-empty" hidden>No saved loops yet — hit Save after you like something.</p>
+    </div>
+  </dialog>
+
+  <script src="midi.js?v=loop-4bars"></script>
+  <script src="app.js?v=serum-grid-sync-1"></script>
+</body>
+</html>

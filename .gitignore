@@ -1,0 +1,60 @@
+# --- User prefs & local data (machine-specific) ---
+user_settings.json
+saves/*
+!saves/.gitkeep
+exports/**
+!exports/.gitkeep
+!exports/audio/
+!exports/audio/.gitkeep
+!exports/midi/
+!exports/midi/.gitkeep
+
+# --- Serum host bounce cache (generated WAVs / state) ---
+host/cache/*
+!host/cache/.gitkeep
+
+# --- Spike / experiment outputs ---
+spikes/out/
+spikes/**/out/
+spikes/**/*.wav
+spikes/**/*.bin
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# --- Editor / OS ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Logs / temp ---
+*.log
+*.tmp
+*.temp
+host/cache/_uvicorn_*.txt
