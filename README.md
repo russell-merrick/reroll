@@ -6,7 +6,7 @@ Local tool to turn **your** samples + Serum libraries into inspiring loops, then
 
 > Your collection, infinite ideas. · Lock the keepers. Dice the rest.
 
-**Open app → 🎲 Generate → Listen → Lock / dice → Export → Produce in Ableton.**
+**Open app → 🎲 Reroll → Listen → Lock / dice → Export → Produce in Ableton.**
 
 Not a song finisher, not cloud AI music, not a DAW replacement.
 
@@ -129,7 +129,7 @@ Rescan anytime from the **Library** UI or `POST /api/scan`. Catalog is in-memory
 ## Using the app
 
 1. Set **BPM**, **key**, **style** (session controls).
-2. **Generate** — fills unlocked tracks from your library.
+2. **Reroll** — fills unlocked tracks from your library.
 3. **Lock** keepers; **dice** (🔀 per track) or **Shuffle** the rest.
 4. **Play** (or **Space**) — loops forever; button toggles stop.
 5. Serum tracks: **M** opens MIDI editor (stackable); length toolbar + drag to resize notes; macros when the host can load the preset.
@@ -276,7 +276,7 @@ Fallback: **Select in Explorer** (files pre-selected) → drag into Live.
 ## Product principle
 
 1. Set BPM / key / style  
-2. **Generate** from *your* library  
+2. **Reroll** from *your* library  
 3. Lock keepers, dice the rest  
 4. Edit Serum MIDI  
 5. Preview fast  
