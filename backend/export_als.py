@@ -319,6 +319,108 @@ def _assert_slot_counts(root: ET.Element) -> None:
         raise RuntimeError("ALS slot count mismatch: " + "; ".join(bad[:6]))
 
 
+def _session_audio_clips(track: ET.Element) -> list[ET.Element]:
+    """AudioClips that live in Session ClipSlots (not arrangement Events)."""
+    clips: list[ET.Element] = []
+    for ms in track.iter("MainSequencer"):
+        csl = ms.find("ClipSlotList")
+        if csl is None:
+            continue
+        for clip in csl.iter("AudioClip"):
+            clips.append(clip)
+        break
+    return clips
+
+
+def _set_clip_timing(clip: ET.Element, *, name: str, beat_length: float, sec_length: float) -> None:
+    """Length, loop, and warp markers for a 4-bar (or N-bar) clip."""
+    beat_s = str(float(beat_length))
+    clip.set("Time", "0")
+    _set_value(clip, "Name", name)
+    _set_value(clip, "CurrentStart", "0")
+    _set_value(clip, "CurrentEnd", beat_s)
+    _set_value(clip, "IsWarped", "true")
+    loop = clip.find("Loop")
+    if loop is not None:
+        _set_value(loop, "LoopOn", "true")
+        _set_value(loop, "LoopStart", "0")
+        _set_value(loop, "LoopEnd", beat_s)
+        _set_value(loop, "StartRelative", "0")
+        _set_value(loop, "OutMarker", beat_s)
+        for tag in ("HiddenLoopStart", "HiddenLoopEnd"):
+            h = loop.find(tag)
+            if h is not None and "Value" in h.attrib:
+                h.set("Value", "0" if "Start" in tag else beat_s)
+
+    # Map full sample duration → beat_length so the clip spans the loop
+    markers = clip.find("WarpMarkers")
+    if markers is not None:
+        for child in list(markers):
+            markers.remove(child)
+        sec = max(0.001, float(sec_length))
+        ET.SubElement(markers, "WarpMarker", Id="0", SecTime="0", BeatTime="0")
+        ET.SubElement(
+            markers,
+            "WarpMarker",
+            Id="1",
+            SecTime=str(sec),
+            BeatTime=beat_s,
+        )
+
+
+def _place_arrangement_clips(track: ET.Element, *, beat_length: float) -> int:
+    """
+    Session clips alone do not appear on the Arrangement timeline.
+
+    Arrangement audio lives under:
+      MainSequencer/Sample/ArrangerAutomation/Events  →  AudioClip Time="0"
+    """
+    session_clips = _session_audio_clips(track)
+    if not session_clips:
+        return 0
+
+    placed = 0
+    for ms in track.iter("MainSequencer"):
+        sample = ms.find("Sample")
+        if sample is None:
+            sample = ET.SubElement(ms, "Sample")
+        arr = sample.find("ArrangerAutomation")
+        if arr is None:
+            arr = ET.SubElement(sample, "ArrangerAutomation")
+        events = arr.find("Events")
+        if events is None:
+            events = ET.SubElement(arr, "Events")
+        # Clear any leftover template arrangement events
+        for child in list(events):
+            events.remove(child)
+
+        # One clip starting at bar 1 (Time is arrangement beat position)
+        src = session_clips[0]
+        arr_clip = deepcopy(src)
+        arr_clip.set("Time", "0")
+        _set_value(arr_clip, "CurrentStart", "0")
+        _set_value(arr_clip, "CurrentEnd", str(float(beat_length)))
+        events.append(arr_clip)
+        placed += 1
+        break
+    return placed
+
+
+def _configure_transport(ls: ET.Element, *, beat_length: float) -> None:
+    """Enable the arrangement loop brace over [0, beat_length) beats (e.g. 4 bars)."""
+    beat_s = str(float(beat_length))
+    for transport in ls.iter("Transport"):
+        _set_value(transport, "LoopOn", "true")
+        _set_value(transport, "LoopStart", "0")
+        _set_value(transport, "LoopLength", beat_s)
+        _set_value(transport, "LoopIsSongStart", "true")
+        _set_value(transport, "CurrentTime", "0")
+    # Selection / follow region
+    for ts in ls.findall("TimeSelection"):
+        _set_value(ts, "AnchorTime", "0")
+        _set_value(ts, "OtherTime", beat_s)
+
+
 def _configure_audio_track(
     track: ET.Element,
     *,
@@ -332,6 +434,7 @@ def _configure_audio_track(
     """Mutate a cloned AudioTrack for one stem. Returns next free Id."""
     track.set("Id", str(track_id))
     frames, rate = _wav_frames_and_rate(abs_sample)
+    sec_length = float(frames) / float(rate or 44100)
     size = 0
     try:
         size = abs_sample.stat().st_size
@@ -370,24 +473,12 @@ def _configure_audio_track(
     for el in track.iter("BrowserContentPath"):
         el.set("Value", "")
 
-    beat_s = str(float(beat_length))
-    for clip in track.iter("AudioClip"):
-        _set_value(clip, "Name", name)
-        _set_value(clip, "CurrentStart", "0")
-        _set_value(clip, "CurrentEnd", beat_s)
-        _set_value(clip, "IsWarped", "true")
-        loop = clip.find("Loop")
-        if loop is not None:
-            _set_value(loop, "LoopOn", "true")
-            _set_value(loop, "LoopStart", "0")
-            _set_value(loop, "LoopEnd", beat_s)
-            _set_value(loop, "StartRelative", "0")
-            _set_value(loop, "OutMarker", beat_s)
-            # Hidden loop bounds if present
-            for tag in ("HiddenLoopStart", "HiddenLoopEnd"):
-                h = loop.find(tag)
-                if h is not None and "Value" in h.attrib:
-                    h.set("Value", "0" if "Start" in tag else beat_s)
+    # Session clip timing first
+    for clip in _session_audio_clips(track):
+        _set_clip_timing(clip, name=name, beat_length=beat_length, sec_length=sec_length)
+
+    # Mirror into Arrangement (empty Events = silent timeline)
+    _place_arrangement_clips(track, beat_length=beat_length)
 
     # Unique Ids for nested elements (avoid Live collisions across tracks)
     return _renumber_ids(track, track_id * 1000 + 1)
@@ -480,6 +571,8 @@ def write_als_project(
 
     bars_i = max(1, min(32, int(bars or 4)))
     beat_length = float(bars_i * 4)  # 4/4: 4 beats per bar
+    # Arrangement loop brace + playhead (Session clips alone stay on session grid)
+    _configure_transport(ls, beat_length=beat_length)
 
     written_samples: list[str] = []
     next_track_id = 10
@@ -603,8 +696,10 @@ def write_als_project(
                     f"Ableton Live Set: {als_name}",
                     "",
                     "Double-click the .als file (same folder) to open in Live.",
-                    "Stems used by the set are under Samples\\Imported\\",
-                    "Flat .wav files in this folder are for drag-and-drop.",
+                    "Session: scene 1 has each stem as a clip.",
+                    "Arrangement: same clips at bar 1, loop brace = full loop length.",
+                    "If Session is launching clips, hit Back to Arrangement (▶←).",
+                    "Stems: Samples\\Imported\\  ·  flat .wavs = drag-and-drop.",
                     "",
                 ]
             ),

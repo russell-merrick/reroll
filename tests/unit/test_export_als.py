@@ -102,6 +102,23 @@ def test_write_als_project(tmp_path: Path):
                     continue
                 n_slots = sum(1 for s in csl if s.tag == "ClipSlot")
                 assert n_slots == n_scenes, f"{seq_name} slots={n_slots} scenes={n_scenes}"
+        # Arrangement: one AudioClip in Sample/ArrangerAutomation/Events
+        ms = track.find("DeviceChain/MainSequencer")
+        if ms is None:
+            ms = next(track.iter("MainSequencer"), None)
+        assert ms is not None
+        events = ms.find("Sample/ArrangerAutomation/Events")
+        assert events is not None
+        arr_clips = [c for c in events if c.tag == "AudioClip"]
+        assert len(arr_clips) == 1, "expected arrangement clip"
+        assert arr_clips[0].get("Time") == "0"
+        assert float(arr_clips[0].find("CurrentEnd").get("Value")) == 16.0  # 4 bars
+    # Transport loop brace covers the same 4 bars
+    transport = root.find("LiveSet").find("Transport")
+    assert transport is not None
+    assert transport.find("LoopOn").get("Value") == "true"
+    assert float(transport.find("LoopStart").get("Value")) == 0.0
+    assert float(transport.find("LoopLength").get("Value")) == 16.0
 
 
 def test_export_loop_writes_als(tmp_path: Path):
