@@ -19,8 +19,10 @@ import xml.etree.ElementTree as ET
 
 TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "live_set_template.xml"
 
-# RelativePathType 6 = project-relative (Live 12 user sets; matches real FileRefs)
-_PROJECT_RELATIVE = "6"
+# RelativePathType 3 = project-relative. Real Live 11/12 saves use 3 for
+# Samples/Imported/… FileRefs (verified against Live 12.2 sets); no real
+# file uses 6.
+_PROJECT_RELATIVE = "3"
 
 # Live 12-only / rejected nodes that trigger "unknown class …" corrupt errors
 _DROP_TAGS = frozenset(
@@ -76,14 +78,16 @@ def _normalize_track_grouping(root: ET.Element) -> None:
             for c in list(ltg):
                 ltg.remove(c)
 
-    # Audio routed into a group that no longer exists → Master
+    # Audio routed into a group that no longer exists → Main
+    # (Live 12 routing target is "AudioOut/Main"; the display string stays
+    # "Master". Real 12.2 saves never contain "AudioOut/Master".)
     for routing in root.iter("AudioOutputRouting"):
         target = routing.find("Target")
         if target is None:
             continue
         val = (target.get("Value") or "").strip()
-        if "GroupTrack" in val or val in ("", "AudioOut/None"):
-            target.set("Value", "AudioOut/Master")
+        if "GroupTrack" in val or "Master" in val or val in ("", "AudioOut/None"):
+            target.set("Value", "AudioOut/Main")
             upper = routing.find("UpperDisplayString")
             if upper is not None:
                 upper.set("Value", "Master")
@@ -191,10 +195,19 @@ def _beat_str(v: float) -> str:
 
 def _load_template(path: Path) -> ET.Element:
     raw = path.read_text(encoding="utf-8")
-    # Live 12 Master bus rename — keep Master for broader open compatibility
-    raw = raw.replace("AudioOut/Main", "AudioOut/Master")
+    # Live 12 routing target is "AudioOut/Main" (display string stays "Master").
+    # A 12-schema file carrying the legacy "AudioOut/Master" target is a form
+    # Live 12 never writes — normalize any stale template to the modern one.
+    raw = raw.replace("AudioOut/Master", "AudioOut/Main")
     root = ET.fromstring(raw)
     _strip_unknown_live_nodes(root)
+    # SpanAlgorithm/FixedLength leaked from a newer-than-12.2 DefaultLiveSet;
+    # 12.2 sets don't have it and unknown child nodes hard-fail Live's loader
+    # (missing nodes just get defaults).
+    for span in root.iter("SpanAlgorithm"):
+        fixed_len = span.find("FixedLength")
+        if fixed_len is not None:
+            span.remove(fixed_len)
     _normalize_scale_information(root)
     _normalize_track_grouping(root)
     # Live 12 header (user machines are on Live 12; still opens fine)
@@ -395,6 +408,22 @@ def _finalize_unique_pointee_ids(root: ET.Element) -> dict[str, int]:
     }
 
 
+def _uniquify_clip_ids(root: ET.Element) -> int:
+    """
+    Give every AudioClip / MidiClip a unique document-wide Id.
+
+    Real Live saves use distinct small ints per clip (e.g. 5, 15, 22, 28 in
+    one arrangement Events list — never repeated). Cloning tracks otherwise
+    ships every clip with the template clip's Id.
+    """
+    next_id = 1
+    for el in root.iter():
+        if el.tag in ("AudioClip", "MidiClip") and "Id" in el.attrib:
+            el.set("Id", str(next_id))
+            next_id += 1
+    return next_id - 1
+
+
 def _strip_returns_and_sends(root: ET.Element) -> dict[str, int]:
     """
     Stem exports don't need reverb returns. Live is strict:
@@ -501,13 +530,42 @@ def _make_empty_clip_slot(slot_id: int = 0) -> ET.Element:
     return slot
 
 
+_CLIP_TRACK_TAGS = ("AudioTrack", "MidiTrack", "GroupTrack")
+
+
+def _track_clip_slot_lists(root: ET.Element) -> list[tuple[str, ET.Element]]:
+    """
+    (sequencer_tag, ClipSlotList) pairs for clip-playing tracks ONLY.
+
+    Real Live 12.2 sets keep the ClipSlotLists under MainTrack,
+    PreHearTrack, and ReturnTrack sequencers EMPTY even with 8 scenes —
+    only Audio/Midi/Group tracks carry one ClipSlot per scene. Filling
+    the MainTrack list corrupts the set (hard crash, no repair dialog).
+    """
+    out: list[tuple[str, ET.Element]] = []
+    ls = root.find("LiveSet")
+    tracks_el = ls.find("Tracks") if ls is not None else None
+    if tracks_el is None:
+        return out
+    for track in tracks_el:
+        if track.tag not in _CLIP_TRACK_TAGS:
+            continue
+        for seq in track.iter():
+            if seq.tag not in ("MainSequencer", "FreezeSequencer"):
+                continue
+            csl = seq.find("ClipSlotList")
+            if csl is not None:
+                out.append((seq.tag, csl))
+    return out
+
+
 def _normalize_session_slots(root: ET.Element, n_slots: int = 1) -> dict[str, int]:
     """
-    Live requires EVERY ClipSlotList length == Scenes count
-    (MainSequencer, FreezeSequencer, AudioSequencer, MainTrack, …).
+    Live requires ClipSlotList length == Scenes count on every
+    Audio/Midi/Group track sequencer (MainSequencer + FreezeSequencer).
 
-    Template often has Main=4, Freeze=53, Scenes=8 → \"slot count mismatch\".
-    Collapse everything to one scene / one slot (clip in MainSequencer only).
+    MainTrack / PreHearTrack / ReturnTrack slot lists must stay EMPTY —
+    that is what real Live 12.2 saves look like; do not touch them here.
     """
     n_slots = max(1, min(16, int(n_slots)))
     ls = root.find("LiveSet")
@@ -530,9 +588,11 @@ def _normalize_session_slots(root: ET.Element, n_slots: int = 1) -> dict[str, in
                     name_el.set("Value", "Reroll" if i == 0 else "")
                 scenes_el.append(sc)
 
-    # Blank slot prototype from any empty ClipSlot in the doc
+    track_lists = _track_clip_slot_lists(root)
+
+    # Blank slot prototype from any empty ClipSlot on a real track
     empty_proto: ET.Element | None = None
-    for csl in root.iter("ClipSlotList"):
+    for _, csl in track_lists:
         for slot in csl:
             if slot.tag == "ClipSlot" and not _slot_has_clip(slot):
                 empty_proto = deepcopy(slot)
@@ -540,18 +600,8 @@ def _normalize_session_slots(root: ET.Element, n_slots: int = 1) -> dict[str, in
         if empty_proto is not None:
             break
 
-    # Parent map so we know if a ClipSlotList sits under MainSequencer
-    parent_of: dict[ET.Element, ET.Element] = {}
-    for parent in root.iter():
-        for child in parent:
-            parent_of[child] = parent
-
     lists_fixed = 0
-    # Snapshot list first — tree mutates as we rewrite children
-    all_csl = list(root.iter("ClipSlotList"))
-    for csl in all_csl:
-        parent = parent_of.get(csl)
-        parent_tag = parent.tag if parent is not None else ""
+    for seq_tag, csl in track_lists:
         slots = [s for s in list(csl) if s.tag == "ClipSlot"]
         filled = [s for s in slots if _slot_has_clip(s)]
         blanks = [s for s in slots if not _slot_has_clip(s)]
@@ -564,7 +614,7 @@ def _normalize_session_slots(root: ET.Element, n_slots: int = 1) -> dict[str, in
         for s in list(csl):
             csl.remove(s)
 
-        keep_clip = parent_tag == "MainSequencer" and bool(filled)
+        keep_clip = seq_tag == "MainSequencer" and bool(filled)
         for i in range(n_slots):
             if keep_clip and i == 0:
                 slot = deepcopy(filled[0])
@@ -586,10 +636,15 @@ def _assert_slot_counts(root: ET.Element) -> None:
     scenes_el = ls.find("Scenes")
     n_scenes = len(list(scenes_el)) if scenes_el is not None else 0
     bad: list[str] = []
+    track_lists = {id(csl) for _, csl in _track_clip_slot_lists(root)}
     for csl in root.iter("ClipSlotList"):
         n = sum(1 for s in csl if s.tag == "ClipSlot")
-        if n != n_scenes:
-            bad.append(f"ClipSlotList slots={n} scenes={n_scenes}")
+        if id(csl) in track_lists:
+            if n != n_scenes:
+                bad.append(f"track ClipSlotList slots={n} scenes={n_scenes}")
+        elif n != 0:
+            # MainTrack / PreHear / Return lists carry zero slots in real sets
+            bad.append(f"non-track ClipSlotList slots={n} expected 0")
     if bad:
         raise RuntimeError("ALS slot count mismatch: " + "; ".join(bad[:6]))
 
@@ -671,7 +726,8 @@ def _fix_sampleref_live12(
             elif el.tag == "Path":
                 el.set("Value", abs_path)
             elif el.tag == "Type":
-                el.set("Value", "1")
+                # FileRef Type 2 = file (1 = folder); real audio refs use 2
+                el.set("Value", "2")
             elif el.tag == "OriginalFileSize":
                 el.set("Value", str(size))
             elif el.tag == "OriginalCrc":
@@ -706,15 +762,17 @@ def _fix_sampleref_live12(
         dsr = sr.find("DefaultSampleRate")
         if dsr is not None:
             dsr.set("Value", str(rate))
+        # 0 = nothing left to auto-warp; real warped clips carry 0. A nonzero
+        # value asks Live to re-warp a clip that already has markers.
         if sr.find("SamplesToAutoWarp") is None:
-            saw = ET.Element("SamplesToAutoWarp", Value="1")
+            saw = ET.Element("SamplesToAutoWarp", Value="0")
             dsr_el = sr.find("DefaultSampleRate")
             if dsr_el is not None:
                 sr.insert(list(sr).index(dsr_el) + 1, saw)
             else:
                 sr.append(saw)
         else:
-            _set_value(sr, "SamplesToAutoWarp", "1")
+            _set_value(sr, "SamplesToAutoWarp", "0")
 
 
 def _set_clip_timing(
@@ -780,6 +838,18 @@ def _set_clip_timing(
             Id="1",
             SecTime=repr(float(sec)),
             BeatTime=length_s,
+        )
+        # Live always writes a terminal marker 1/32 beat past the end
+        # (defines tempo extrapolation past the last real marker); SecTime
+        # continues the last segment's slope.
+        ghost_beat = float(beat_length) + 0.03125
+        ghost_sec = float(sec) * (ghost_beat / float(beat_length))
+        ET.SubElement(
+            markers,
+            "WarpMarker",
+            Id="2",
+            SecTime=repr(ghost_sec),
+            BeatTime=_beat_str(ghost_beat),
         )
 
     scroller = clip.find("ScrollerTimePreserver")
@@ -931,8 +1001,13 @@ def _configure_audio_track(
     for el in track.iter("RelativePath"):
         el.set("Value", rel_fwd)
     for el in track.iter("RelativePathType"):
-        # Live 12.2 project samples use type 6 (not classic 3)
+        # 3 = project-relative (what real Live saves use for project samples)
         el.set("Value", _PROJECT_RELATIVE)
+    for fr_el in track.iter("FileRef"):
+        type_el = fr_el.find("Type")
+        if type_el is not None:
+            # FileRef Type 2 = file (1 = folder); real audio refs use 2
+            type_el.set("Value", "2")
     for el in track.iter("Path"):
         el.set("Value", abs_fwd)
     for el in track.iter("OriginalFileSize"):
@@ -1129,15 +1204,17 @@ def write_als_project(
     # Session slots must match scene count on EVERY ClipSlotList in the set
     slot_info = _normalize_session_slots(root, n_slots=1)
 
-    # Session-only stems by default: arrangement AudioClip injection has caused
-    # repeated Live hard-crashes ("serious program error"). Session clips in
-    # scene 1 still open reliably; user can drag to arrangement in Live.
-    # Set REROLL_ALS_ARRANGEMENT=1 to re-enable experimental arrangement clips.
+    # Arrangement clips on by default. The historical hard-crashes traced to
+    # concrete schema violations (MainTrack ClipSlot inject, legacy
+    # AudioOut/Master routing, RelativePathType 6, duplicate clip Ids,
+    # missing terminal warp marker, 12.3-only FixedLength node) — all fixed
+    # against real Live 12.2 saves. Set REROLL_ALS_ARRANGEMENT=0 to fall back
+    # to session-only clips.
     arr_placed = 0
-    want_arrangement = os.environ.get("REROLL_ALS_ARRANGEMENT", "").strip() in (
-        "1",
-        "true",
-        "yes",
+    want_arrangement = os.environ.get("REROLL_ALS_ARRANGEMENT", "1").strip() not in (
+        "0",
+        "false",
+        "no",
     )
     audio_tracks = tracks_el.findall("AudioTrack")
     for ti, track in enumerate(audio_tracks):
@@ -1174,6 +1251,9 @@ def write_als_project(
         track.set("Id", str(10 + ti))
         next_free_id = _renumber_ids(track, track_base)
         track.set("Id", str(10 + ti))
+
+    # Unique clip Ids across session + arrangement (real sets never repeat them)
+    n_clips = _uniquify_clip_ids(root)
 
     # Zero returns + zero sends (Live rejects any send/return count mismatch)
     send_info = _strip_returns_and_sends(root)
@@ -1229,6 +1309,17 @@ def write_als_project(
         pids = [p.get("Id") for p in check_root.iter("Pointee")]
         if len(pids) != len(set(pids)):
             return {"ok": False, "error": "ALS serialize has duplicate Pointee Ids"}
+        # Clip Ids unique on serialized tree
+        cids = [
+            c.get("Id")
+            for c in check_root.iter()
+            if c.tag in ("AudioClip", "MidiClip") and c.get("Id")
+        ]
+        if len(cids) != len(set(cids)):
+            return {"ok": False, "error": "ALS serialize has duplicate clip Ids"}
+        # Live 12 never writes the legacy Master routing target
+        if "AudioOut/Master" in body_txt:
+            return {"ok": False, "error": "ALS contains legacy AudioOut/Master routing"}
     except Exception as exc:
         return {"ok": False, "error": f"ALS serialize verify failed: {exc}"}
 
@@ -1265,7 +1356,8 @@ def write_als_project(
         f"[reroll] ALS OK path={als_path} NextPointeeId={disk_npi_v} "
         f"scenes={n_sc} slot_list_sizes={list_sizes} arr_clips={n_arr_clips} "
         f"(max Id={max_id}, npi_subs={n_sub}, scrub={scrub}, lists={slot_info.get('lists')}, "
-        f"arr_placed={arr_placed}, pointee_reassigned={pointee_info.get('reassigned')}, "
+        f"arr_placed={arr_placed}, clips={n_clips}, "
+        f"pointee_reassigned={pointee_info.get('reassigned')}, "
         f"envelopes_cleared={pointee_info.get('envelopes_cleared')}) "
         f"returns_removed={send_info.get('returns_removed')} "
         f"sends_removed={send_info.get('send_holders_removed')} "

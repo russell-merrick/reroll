@@ -1,8 +1,41 @@
-# Ableton `.als` export — status (paused)
+# Ableton `.als` export — status
 
 **Date:** 2026-08-11  
-**Status:** **Paused / not reliable.** Live still hard-crashes on open (“A serious program error has occurred”).  
-**Recommendation:** Export **stems + MIDI only** (disable “Write .als Live Set”). Drag `.wav` files into Live. Revisit `.als` later with a golden file from the user’s Live version.
+**Status:** **Root causes found and fixed; awaiting open-in-Live confirmation.**
+Six concrete schema violations were identified by diffing generated output
+against real Live 12.2 saves (golden files sourced from public repos —
+see “Root-cause findings” below). Session + arrangement clips both enabled;
+`REROLL_ALS_ARRANGEMENT=0` falls back to session-only.
+
+## Root-cause findings (2026-08-11)
+
+Ground truth: a genuine blank Live **12.2.1** set (`MinorVersion 12.0_12203`,
+same schema the template claims), a real Live 12 audio track with 7
+arrangement clips, and a real collected-project SampleRef. Every deviation
+below existed in our output and in **no** real Live save:
+
+| # | Violation (ours) | Real Live 12.2 | Impact |
+|---|------------------|----------------|--------|
+| 1 | `_normalize_session_slots` force-filled **every** `ClipSlotList` to scene count — including `MainTrack/DeviceChain/FreezeSequencer/AudioSequencer` | MainTrack / PreHearTrack / ReturnTrack slot lists have **0 slots** even with 8 scenes; only Audio/Midi/Group tracks match scene count | Prime hard-crash candidate — a clip slot on the Main track is a state Live never writes |
+| 2 | Routing target rewritten to `AudioOut/Master` (template loader actively converted `Main`→`Master`) | Target is `AudioOut/Main` (display string stays “Master”) | Legacy pre-11 form inside a 12-schema file |
+| 3 | `RelativePathType=6`, FileRef `Type=1` | Project samples: `RelativePathType=3`; audio file refs: `Type=2` (1 = folder) | 6 appears in no real file; wrong type breaks path resolution |
+| 4 | Template carried `SpanAlgorithm/FixedLength` (leaked from a newer-than-12.2 DefaultLiveSet — the “schema mix” suspicion was right) | Absent in 12.2 | Unknown child nodes hard-fail Live’s loader; missing nodes just get defaults |
+| 5 | Every clip shipped `Id="1"` (session and arrangement, all tracks) | Clip Ids are unique small ints document-wide (e.g. 5, 15, 22, 28 in one Events list) | Duplicate object ids |
+| 6 | 2 warp markers ending exactly at loop end; `SamplesToAutoWarp=1` | Terminal **ghost marker at +1/32 beat** (SecTime linearly extrapolated); `SamplesToAutoWarp=0` on warped clips | Missing end-marker convention; nonzero value asks Live to re-warp on load |
+
+All six are fixed in `backend/export_als.py` (writer-side, template-agnostic),
+`backend/templates/live_set_template.xml`, and
+`scripts/build_als_template_from_default.py`. Serialization now also refuses
+to ship `AudioOut/Master` or duplicate clip Ids. Unit tests assert every
+invariant (`tests/unit/test_export_als.py`, 6 tests).
+
+Verification method: full path-set diff of generated XML vs the real 12.2.1
+save — after the fixes, the generated set contains **zero** structural paths
+that don’t exist in a genuine Live save (outside actual clip content).
+
+---
+
+## Historical notes (pre-fix, kept for context)
 
 ---
 
@@ -48,7 +81,7 @@ Saying “Yes” to repair after pointee errors was followed by the same critica
 | `backend/export_loop.py` | Calls `write_als_project` when `write_als=True` |
 | `frontend` | “Write .als Live Set” checkbox; opens Explorer on `.als` after export |
 
-**Arrangement clips:** disabled by default (session scene 1 only). Re-enable only with env `REROLL_ALS_ARRANGEMENT=1` (experimental; historically crash-prone).
+**Arrangement clips:** enabled by default since the 2026-08-11 fixes. Disable with env `REROLL_ALS_ARRANGEMENT=0` (session-only fallback).
 
 **Smoke folder:** `exports/_open_me_in_live/` may contain a last generated probe set — treat as disposable.
 
@@ -150,14 +183,19 @@ python -m pytest tests/unit/test_export_als.py -q
 # rebuild template (requires Ableton install paths on this machine)
 python scripts/build_als_template_from_default.py
 
-# experimental arrangement clips
-set REROLL_ALS_ARRANGEMENT=1
+# fall back to session-only clips
+set REROLL_ALS_ARRANGEMENT=0
 ```
 
 ---
 
 ## Decision
 
-**Stop iterating on `.als` open-in-Live until** there is a **user-provided golden `.als`** that opens on their exact Live version, or a dedicated spike that produces a **single-track** set proven to open before multi-track is re-enabled.
+~~Stop iterating on `.als` open-in-Live until there is a user-provided golden `.als`.~~
+**Superseded 2026-08-11:** golden files were sourced from public repos (real
+Live 12.2 saves) and the diff surfaced six concrete schema violations, all
+fixed. Next step: open a freshly exported `.als` in the user's Live 12.2.6 to
+confirm. If it still crashes, the remaining delta vs a set saved by *that*
+Live build is now small enough to diff directly.
 
-Stems export remains the supported Ableton handoff path.
+Stems export remains a supported Ableton handoff path either way.

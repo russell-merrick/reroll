@@ -69,7 +69,11 @@ def test_write_als_project(tmp_path: Path):
     assert "MidiEditorLaneModel" not in xml
     assert "ExpressionLanes" not in xml
     assert "ContentLanes" not in xml
-    assert "AudioOut/Main" not in xml
+    # Newer-than-12.2 node leaked from a mismatched DefaultLiveSet
+    assert "FixedLength" not in xml
+    # Live 12 routing target is AudioOut/Main; it never writes AudioOut/Master
+    assert "AudioOut/Master" not in xml
+    assert "AudioOut/Main" in xml
     # NextPointeeId must exceed every Id= in the document
     max_id = 0
     for el in root.iter():
@@ -91,6 +95,14 @@ def test_write_als_project(tmp_path: Path):
     # Scene count == session slot count on every track sequencer
     n_scenes = len(list(root.find("LiveSet").find("Scenes")))
     assert n_scenes >= 1
+    # MainTrack / PreHearTrack slot lists must stay EMPTY — real Live 12.2
+    # saves keep zero ClipSlots there; filling them hard-crashes Live on open
+    for special in ("MainTrack", "PreHearTrack"):
+        st = root.find("LiveSet").find(special)
+        if st is None:
+            continue
+        for csl in st.iter("ClipSlotList"):
+            assert len(list(csl)) == 0, f"{special} ClipSlotList must be empty"
     for track in tracks_el:
         if track.tag != "AudioTrack":
             continue
@@ -126,11 +138,18 @@ def test_write_als_project(tmp_path: Path):
         assert len(list(sc)) == 0
         fr = ac.find("SampleRef/FileRef")
         assert fr is not None
-        assert fr.find("RelativePathType").get("Value") == "6"
-        # Arrangement Events empty by default (no hard-crash inject)
+        # 3 = project-relative; 2 = file (real Live saves use these)
+        assert fr.find("RelativePathType").get("Value") == "3"
+        assert fr.find("Type").get("Value") == "2"
+        assert ac.find("SampleRef/SamplesToAutoWarp").get("Value") == "0"
+        # Live always writes a terminal warp marker 1/32 beat past the end
+        wms = ac.findall("WarpMarkers/WarpMarker")
+        assert len(wms) == 3
+        assert float(wms[-1].get("BeatTime")) == 16.0 + 0.03125
+        # Arrangement clips placed by default (REROLL_ALS_ARRANGEMENT=0 opts out)
         events = ms.find("Sample/ArrangerAutomation/Events")
-        if events is not None:
-            assert sum(1 for c in events if c.tag == "AudioClip") == 0
+        assert events is not None
+        assert sum(1 for c in events if c.tag == "AudioClip") == 1
     # Transport loop brace covers the same 4 bars
     transport = root.find("LiveSet").find("Transport")
     assert transport is not None
@@ -160,6 +179,13 @@ def test_write_als_project(tmp_path: Path):
             assert slot.get("Id") == str(i), f"ClipSlot Id={slot.get('Id')} expected {i}"
     for i, sc in enumerate(root.find("LiveSet").find("Scenes")):
         assert sc.get("Id") == str(i)
+    # Clip Ids must be unique document-wide (real Live never repeats them)
+    cids = [
+        c.get("Id")
+        for c in root.iter()
+        if c.tag in ("AudioClip", "MidiClip") and c.get("Id")
+    ]
+    assert len(cids) == len(set(cids)), f"duplicate clip Ids: {cids}"
     # Pointee Ids must be unique (Live: "non-unique pointee IDs")
     pids = [p.get("Id") for p in root.iter("Pointee")]
     assert len(pids) == len(set(pids)), f"duplicate Pointees: {pids}"
@@ -169,6 +195,68 @@ def test_write_als_project(tmp_path: Path):
     npi = int(root.find("LiveSet").find("NextPointeeId").get("Value"))
     for p in pids:
         assert int(p) < npi
+
+
+def test_write_als_project_session_only(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("REROLL_ALS_ARRANGEMENT", "0")
+    a = tmp_path / "01_kick.wav"
+    _tiny_wav(a, 40)
+    out = write_als_project(
+        parent_dir=tmp_path / "out",
+        project_name="Session Only",
+        bpm=140,
+        bars=4,
+        audio_files=[{"name": "01_kick.wav", "abs_path": a, "track": "kick"}],
+    )
+    assert out["ok"], out
+    xml = gzip.decompress(Path(out["als_path"]).read_bytes()).decode("utf-8")
+    root = ET.fromstring(xml)
+    for events in root.iter("Events"):
+        assert sum(1 for c in events if c.tag == "AudioClip") == 0
+
+
+def test_write_als_project_arrangement(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("REROLL_ALS_ARRANGEMENT", "1")
+    a = tmp_path / "01_kick.wav"
+    b = tmp_path / "02_bass.wav"
+    _tiny_wav(a, 40)
+    _tiny_wav(b, 40)
+
+    out = write_als_project(
+        parent_dir=tmp_path / "out",
+        project_name="Arrangement Test",
+        bpm=140,
+        bars=4,
+        audio_files=[
+            {"name": "01_kick.wav", "abs_path": a, "track": "kick"},
+            {"name": "02_bass.wav", "abs_path": b, "track": "bass"},
+        ],
+    )
+    assert out["ok"], out
+    xml = gzip.decompress(Path(out["als_path"]).read_bytes()).decode("utf-8")
+    root = ET.fromstring(xml)
+    tracks_el = root.find("LiveSet").find("Tracks")
+    clip_ids = []
+    for track in tracks_el.findall("AudioTrack"):
+        ms = track.find("DeviceChain/MainSequencer")
+        events = ms.find("Sample/ArrangerAutomation/Events")
+        arr_clips = [c for c in events if c.tag == "AudioClip"]
+        assert len(arr_clips) == 1
+        ac = arr_clips[0]
+        # Arrangement clips use absolute song time
+        assert float(ac.get("Time")) == 0.0
+        assert float(ac.find("CurrentStart").get("Value")) == 0.0
+        assert float(ac.find("CurrentEnd").get("Value")) == 16.0
+        assert ac.find("SampleRef/FileRef/RelativePathType").get("Value") == "3"
+        assert ac.find("SampleRef/FileRef/Type").get("Value") == "2"
+        wms = ac.findall("WarpMarkers/WarpMarker")
+        assert len(wms) == 3
+        # Session clip still present alongside the arrangement clip
+        session_clips = list(ms.find("ClipSlotList").iter("AudioClip"))
+        assert len(session_clips) == 1
+        clip_ids.extend(c.get("Id") for c in (ac, session_clips[0]))
+    # No clip Id repeats across session + arrangement on any track
+    assert len(clip_ids) == len(set(clip_ids)), clip_ids
 
 
 def test_export_loop_writes_als(tmp_path: Path):

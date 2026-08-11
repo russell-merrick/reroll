@@ -78,7 +78,7 @@
 						</MpeSettings>
 					</MidiInputRouting>
 					<AudioOutputRouting>
-						<Target Value="AudioOut/Master" />
+						<Target Value="AudioOut/Main" />
 						<UpperDisplayString Value="Master" />
 						<LowerDisplayString Value="" />
 						<MpeSettings>
@@ -323,10 +323,10 @@
 										</ScaleInformation>
 										<SampleRef>
 											<FileRef>
-												<RelativePathType Value="6" />
+												<RelativePathType Value="3" />
 												<RelativePath Value="Samples/Imported/PLACEHOLDER.wav" />
 												<Path Value="" />
-												<Type Value="1" />
+												<Type Value="2" />
 												<LivePackName Value="" />
 												<LivePackId Value="" />
 												<OriginalFileSize Value="0" />
@@ -337,7 +337,7 @@
 											<SampleUsageHint Value="0" />
 											<DefaultDuration Value="44100" />
 											<DefaultSampleRate Value="44100" />
-											<SamplesToAutoWarp Value="1" />
+											<SamplesToAutoWarp Value="0" />
 										</SampleRef>
 										<Onsets>
 											<UserOnsets />
@@ -1405,7 +1405,6 @@
 				<ChordThreshold Value="10" />
 				<LengthVariation Value="0" />
 				<LengthOffset Value="0" />
-				<FixedLength Value="0" />
 			</SpanAlgorithm>
 			<ConnectAlgorithm Id="2">
 				<NamedKeyMidiRemoteables>

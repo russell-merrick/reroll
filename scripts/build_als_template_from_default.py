@@ -51,7 +51,12 @@ def _blank_clip(clip: ET.Element) -> None:
                 fr.remove(child)
         rpt = fr.find("RelativePathType")
         if rpt is not None:
-            rpt.set("Value", "6")
+            # 3 = project-relative (what real Live saves use for project samples)
+            rpt.set("Value", "3")
+        type_el = fr.find("Type")
+        if type_el is not None:
+            # FileRef Type 2 = file (1 = folder)
+            type_el.set("Value", "2")
     name = clip.find("Name")
     if name is not None:
         name.set("Value", "PLACEHOLDER")
@@ -101,7 +106,7 @@ def _blank_clip(clip: ET.Element) -> None:
         for tag, val in (
             ("DefaultDuration", "44100"),
             ("DefaultSampleRate", "44100"),
-            ("SamplesToAutoWarp", "1"),
+            ("SamplesToAutoWarp", "0"),
         ):
             el = sr.find(tag)
             if el is not None:
@@ -179,7 +184,8 @@ def main() -> None:
     for routing in proto.iter("AudioOutputRouting"):
         t = routing.find("Target")
         if t is not None:
-            t.set("Value", "AudioOut/Master")
+            # Live 12 routing target is "AudioOut/Main"; display stays "Master"
+            t.set("Value", "AudioOut/Main")
         u = routing.find("UpperDisplayString")
         if u is not None:
             u.set("Value", "Master")
@@ -227,23 +233,23 @@ def main() -> None:
             continue
         for sends in t.iter("Sends"):
             _clear(sends)
-        # Normalize Main/PreHear slot lists to 1 empty slot
+        # Main/PreHear slot lists stay EMPTY — real Live 12.2 saves keep zero
+        # ClipSlots there even with 8 scenes; filling them corrupts the set.
         for csl in t.iter("ClipSlotList"):
-            shell = None
-            for s in list(csl):
-                if s.tag == "ClipSlot":
-                    shell = deepcopy(s)
-                    break
             _clear(csl)
-            if shell is not None:
-                shell.set("Id", "0")
-                _set_slot_clip(shell, None)
-                csl.append(shell)
 
     for tag in ("ExpressionLanes", "ContentLanes", "DetailClipKeyMidis"):
         el = ls.find(tag)
         if el is not None:
             ls.remove(el)
+
+    # DefaultLiveSet may come from a newer Live than the header we claim;
+    # SpanAlgorithm/FixedLength is newer than 12.2 and unknown nodes hard-fail
+    # older loaders (missing nodes just get defaults).
+    for span in root.iter("SpanAlgorithm"):
+        fixed_len = span.find("FixedLength")
+        if fixed_len is not None:
+            span.remove(fixed_len)
 
     # Align header to Live 12.2.6 (user's working version)
     root.set("Creator", "Ableton Live 12.2.6")
