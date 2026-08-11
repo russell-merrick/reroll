@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -89,6 +89,18 @@
           <button type="button" class="btn ghost" id="btn-options-close" data-tip="Hide options">Close</button>
         </div>
         <div class="options-group">
+          <div class="options-group-title" data-tip="Visual look of the app">Appearance</div>
+          <div class="options-theme-row" data-tip="Color theme for the whole UI">
+            <span class="options-label"><strong>Theme</strong></span>
+            <select id="opt-theme" class="options-theme-select" aria-label="Theme">
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+              <option value="neon">Neon</option>
+              <option value="rainbow">Rainbow</option>
+            </select>
+          </div>
+        </div>
+        <div class="options-group">
           <div class="options-group-title" data-tip="Tracks created on load / when you apply defaults. Checked = included in the default loop stack.">Default instruments</div>
           <div class="options-instruments" id="opt-instruments" role="group" aria-label="Default instruments"></div>
         </div>
@@ -165,7 +177,7 @@
             <button type="button" class="btn ghost" id="btn-shuffle" data-tip="Shuffle all unlocked tracks (locked stay put)">🔀 Shuffle</button>
           </div>
           <div class="transport-row transport-row-secondary">
-            <button type="button" class="btn ghost" id="btn-options" data-tip="Show or hide options" aria-expanded="false">Options</button>
+            <button type="button" class="btn ghost" id="btn-options" data-tip="Show or hide options" aria-expanded="false">⚙️ Options</button>
             <button type="button" class="btn ghost" id="btn-save" data-tip="Save this loop with a name (load later from My Loops)">💾 Save</button>
           </div>
           <div
@@ -189,17 +201,18 @@
         <section class="panel export-panel">
           <h2>Ableton</h2>
           <p class="hint" style="margin-bottom:10px">
-            Export once, then <strong>drag chips into your open Live set</strong>
-            (or grab them from Live’s browser → User Library → Samples → Reroll).
+            Export selects <strong>audio stems</strong> in Explorer (sample/preset names).
+            Drop on <strong>empty space below tracks</strong> so Live makes one track per file.
+            Dropping onto one track stacks them all there.
           </p>
-          <button type="button" class="btn primary wide" id="btn-export-panel" data-tip="Bounce stems + MIDI, then drag into Live">Export for Ableton</button>
+          <button type="button" class="btn primary wide" id="btn-export-panel" data-tip="Bounce stems + open Explorer (audio) for multi-track drop into Live">Export for Ableton</button>
           <div class="export-drop" id="export-drop" hidden>
             <div class="export-drop-head">
-              <strong>Drag into Live</strong>
+              <strong>Ready for Live</strong>
               <span class="export-drop-meta" id="export-drop-meta"></span>
             </div>
-            <div class="export-drag-all" id="export-drag-all" draggable="true" title="Drag all clips into Ableton">
-              ⠿ Drag all into Ableton
+            <div class="export-drag-all" id="export-drag-all" title="Select audio stems in Explorer — drop BELOW tracks in Live for one track each">
+              📁 Select audio → drop below tracks in Live
             </div>
             <div class="export-chips" id="export-chips"></div>
             <div class="export-drop-actions">
@@ -228,10 +241,8 @@
             <li><span>synth</span><b>73</b></li>
             <li><span>unknown</span><b>—</b></li>
           </ul>
-          <p class="path mono">C:\Users\russe\Documents\Splice\Samples\packs</p>
-          <p class="path mono">C:\Users\russe\Documents\Xfer\Serum Presets\Presets</p>
-          <p class="path mono">C:\Users\russe\Documents\Xfer\Serum 2 Presets\Presets</p>
-          <button type="button" class="btn ghost wide" id="btn-rescan" data-tip="Rescan sample &amp; Serum folders into memory">Rescan (in memory)</button>
+          <div class="lib-roots" id="lib-roots" aria-label="Scanned roots"></div>
+          <button type="button" class="btn ghost wide" id="btn-rescan" data-tip="Rescan sample &amp; Serum folders into memory">Rescan</button>
         </section>
       </aside>
     </main>
@@ -242,26 +253,41 @@
     </footer>
   </div>
 
-  <!-- Library drawer (design only) -->
+  <!-- Library roots (defaults + custom folders) -->
   <dialog id="library-dialog">
-    <form method="dialog" class="dialog-card">
+    <form method="dialog" class="dialog-card lib-dialog">
       <h2>Library roots</h2>
-      <p class="hint">Add folders to scan. Nothing is uploaded. Catalog stays in memory until rescan.</p>
+      <p class="hint">
+        Defaults (Splice + Xfer) always scan. Add extra folders below (one path per line).
+        Google Drive / remote paths work if Windows can open the files. Nothing is uploaded.
+      </p>
+      <div class="lib-defaults" id="lib-defaults">
+        <div class="hint">Built-in defaults</div>
+        <p class="path mono" id="lib-default-sample">—</p>
+        <p class="path mono" id="lib-default-serum1">—</p>
+        <p class="path mono" id="lib-default-serum2">—</p>
+      </div>
       <label class="field block">
-        <span>Sample root</span>
-        <input type="text" value="C:\Users\russe\Documents\Splice\Samples\packs" readonly />
+        <span>Extra sample folders</span>
+        <textarea
+          id="lib-extra-samples"
+          rows="3"
+          spellcheck="false"
+          placeholder="C:\path\to\samples&#10;G:\Other computers\…\samples"
+        ></textarea>
       </label>
       <label class="field block">
-        <span>Serum 1 root</span>
-        <input type="text" value="C:\Users\russe\Documents\Xfer\Serum Presets\Presets" readonly />
-      </label>
-      <label class="field block">
-        <span>Serum 2 root</span>
-        <input type="text" value="C:\Users\russe\Documents\Xfer\Serum 2 Presets\Presets" readonly />
+        <span>Extra Serum folders (.fxp / .SerumPreset)</span>
+        <textarea
+          id="lib-extra-serum"
+          rows="3"
+          spellcheck="false"
+          placeholder="G:\Other computers\Snowy\music\serum presets"
+        ></textarea>
       </label>
       <div class="dialog-actions">
-        <button type="submit" class="btn ghost" data-tip="Close library dialog">Close</button>
-        <button type="button" class="btn primary" id="dialog-scan" data-tip="Scan library roots now">Scan</button>
+        <button type="submit" class="btn ghost" data-tip="Close without scanning">Close</button>
+        <button type="button" class="btn primary" id="dialog-scan" data-tip="Save roots and rescan now">Save &amp; Scan</button>
       </div>
     </form>
   </dialog>
@@ -296,6 +322,6 @@
   </dialog>
 
   <script src="midi.js?v=loop-4bars"></script>
-  <script src="app.js?v=serum-grid-sync-1"></script>
+  <script src="app.js?v=export-sample-names-5"></script>
 </body>
 </html>

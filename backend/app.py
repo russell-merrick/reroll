@@ -33,7 +33,7 @@ from .catalog import CATALOG
 from .export_loop import export_loop
 from .generate import generate_loop, generate_tracks, reroll_slot
 from .persist import catalog_stats, default_db_path, load_catalog, save_catalog
-from .scanner import scan_library
+from .scanner import DEFAULT_SAMPLE_ROOTS, DEFAULT_SERUM_ROOTS, scan_library
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -173,10 +173,82 @@ class UserSettings(BaseModel):
     serum2: bool = True
     # instrument id → enabled (default track stack)
     instruments: dict[str, bool] = Field(default_factory=dict)
+    # Extra library roots (in addition to Splice / Xfer defaults)
+    sampleRoots: list[str] = Field(default_factory=list)
+    serumRoots: list[str] = Field(default_factory=list)
+    # UI theme: dark | light | neon | rainbow
+    theme: str = "dark"
 
 
 def _default_settings() -> dict[str, Any]:
     return UserSettings().model_dump()
+
+
+def _normalize_root_list(raw: Any) -> list[str]:
+    """Split strings / lists into unique non-empty path strings (order kept)."""
+    if raw is None:
+        return []
+    items: list[str] = []
+    if isinstance(raw, str):
+        # allow newline / semicolon / | separated blobs from the UI
+        for part in re.split(r"[\n;|]+", raw):
+            items.append(part)
+    elif isinstance(raw, (list, tuple)):
+        for x in raw:
+            if isinstance(x, str) and ("\n" in x or ";" in x):
+                items.extend(re.split(r"[\n;|]+", x))
+            else:
+                items.append(str(x) if x is not None else "")
+    else:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for s in items:
+        p = str(s or "").strip().strip('"').strip("'")
+        if not p:
+            continue
+        key = p.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
+def _normalize_settings_dict(data: dict[str, Any], *, source: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Apply clamps / types. `source` is the raw payload (for filterRisers default)."""
+    src = source if source is not None else data
+    base = _default_settings()
+    base.update({k: data[k] for k in base if k in data})
+    try:
+        bpm = int(base.get("bpm", 140))
+        base["bpm"] = max(60, min(200, bpm))
+    except (TypeError, ValueError):
+        base["bpm"] = 140
+    if "filterRisers" in src:
+        base["filterRisers"] = bool(src.get("filterRisers"))
+    else:
+        base["filterRisers"] = True
+    base["filterFactorySerum"] = bool(base.get("filterFactorySerum", False))
+    base["serum1"] = bool(base.get("serum1", True))
+    base["serum2"] = bool(base.get("serum2", True))
+    inst = base.get("instruments")
+    base["instruments"] = (
+        {str(k): bool(v) for k, v in inst.items()} if isinstance(inst, dict) else {}
+    )
+    base["key"] = str(base.get("key") or "F minor")
+    base["style"] = str(base.get("style") or "Techno")
+    base["sampleRoots"] = _normalize_root_list(
+        src.get("sampleRoots", base.get("sampleRoots"))
+    )
+    base["serumRoots"] = _normalize_root_list(
+        src.get("serumRoots", base.get("serumRoots"))
+    )
+    theme = str(src.get("theme", base.get("theme") or "dark") or "dark").lower().strip()
+    if theme not in ("dark", "light", "neon", "rainbow"):
+        theme = "dark"
+    base["theme"] = theme
+    return base
 
 
 def _read_user_settings() -> dict[str, Any]:
@@ -188,55 +260,31 @@ def _read_user_settings() -> dict[str, Any]:
         return _default_settings()
     if not isinstance(data, dict):
         return _default_settings()
-    base = _default_settings()
-    base.update({k: data[k] for k in base if k in data})
-    # Clamp BPM
-    try:
-        bpm = int(base.get("bpm", 140))
-        base["bpm"] = max(60, min(200, bpm))
-    except (TypeError, ValueError):
-        base["bpm"] = 140
-    if "filterRisers" in data:
-        base["filterRisers"] = bool(data.get("filterRisers"))
-    else:
-        base["filterRisers"] = True
-    base["filterFactorySerum"] = bool(base.get("filterFactorySerum", False))
-    base["serum1"] = bool(base.get("serum1", True))
-    base["serum2"] = bool(base.get("serum2", True))
-    inst = base.get("instruments")
-    base["instruments"] = dict(inst) if isinstance(inst, dict) else {}
-    base["key"] = str(base.get("key") or "F minor")
-    base["style"] = str(base.get("style") or "Techno")
-    return base
+    return _normalize_settings_dict(data, source=data)
 
 
 def _write_user_settings(data: dict[str, Any]) -> dict[str, Any]:
-    merged = _default_settings()
-    for k in merged:
+    """Merge known keys from data onto current settings (omitted keys kept)."""
+    if not isinstance(data, dict):
+        data = {}
+    current = _read_user_settings()
+    merged_src = dict(current)
+    for k in _default_settings():
         if k in data:
-            merged[k] = data[k]
-    # Re-normalize via reader rules
-    try:
-        bpm = int(merged.get("bpm", 140))
-        merged["bpm"] = max(60, min(200, bpm))
-    except (TypeError, ValueError):
-        merged["bpm"] = 140
-    if "filterRisers" in data:
-        merged["filterRisers"] = bool(data.get("filterRisers"))
-    else:
-        merged["filterRisers"] = True
-    merged["filterFactorySerum"] = bool(merged.get("filterFactorySerum", False))
-    merged["serum1"] = bool(merged.get("serum1", True))
-    merged["serum2"] = bool(merged.get("serum2", True))
-    inst = merged.get("instruments")
-    if isinstance(inst, dict):
-        merged["instruments"] = {str(k): bool(v) for k, v in inst.items()}
-    else:
-        merged["instruments"] = {}
-    merged["key"] = str(merged.get("key") or "F minor")
-    merged["style"] = str(merged.get("style") or "Techno")
+            merged_src[k] = data[k]
+    merged = _normalize_settings_dict(merged_src, source=merged_src)
     SETTINGS_PATH.write_text(json.dumps(merged, indent=2), encoding="utf-8")
     return merged
+
+
+def _run_library_scan() -> None:
+    """Scan defaults + user extra roots into the process catalog."""
+    s = _read_user_settings()
+    scan_library(
+        CATALOG,
+        extra_sample_roots=s.get("sampleRoots") or [],
+        extra_serum_roots=s.get("serumRoots") or [],
+    )
 
 
 def _find_py312() -> tuple[list[str], str] | None:
@@ -277,7 +325,7 @@ def startup_scan() -> None:
         CATALOG.scanned = True
         CATALOG.last_error = None
     else:
-        scan_library(CATALOG)
+        _run_library_scan()
         try:
             save_catalog(CATALOG, LIBRARY_DB)
         except OSError:
@@ -301,17 +349,22 @@ def health() -> dict[str, str]:
 def library_summary() -> dict[str, Any]:
     summary = CATALOG.summary()
     summary["db"] = catalog_stats(LIBRARY_DB)
+    s = _read_user_settings()
+    summary["extra_sample_roots"] = list(s.get("sampleRoots") or [])
+    summary["extra_serum_roots"] = list(s.get("serumRoots") or [])
+    summary["default_sample_roots"] = [str(p) for p in DEFAULT_SAMPLE_ROOTS]
+    summary["default_serum_roots"] = [str(p) for p in DEFAULT_SERUM_ROOTS]
     return summary
 
 
 @app.post("/api/scan")
 def rescan() -> dict[str, Any]:
-    scan_library(CATALOG)
+    _run_library_scan()
     try:
         db_info = save_catalog(CATALOG, LIBRARY_DB)
     except OSError as exc:
         db_info = {"ok": False, "error": str(exc)}
-    summary = CATALOG.summary()
+    summary = library_summary()
     summary["db"] = db_info
     return summary
 
@@ -331,7 +384,7 @@ def list_samples(role: str | None = None, limit: int = 100) -> dict[str, Any]:
 def stream_audio(path: str = Query(..., description="Absolute path of a catalog sample")):
     """Stream a local sample for browser preview. Only catalog paths are allowed."""
     if not CATALOG.scanned:
-        scan_library(CATALOG)
+        _run_library_scan()
 
     raw = unquote(path)
     try:
@@ -365,7 +418,7 @@ def stream_audio(path: str = Query(..., description="Absolute path of a catalog 
 @app.post("/api/generate")
 def api_generate(body: GenerateRequest) -> dict[str, Any]:
     if not CATALOG.scanned:
-        scan_library(CATALOG)
+        _run_library_scan()
     if not CATALOG.samples and not CATALOG.serum:
         raise HTTPException(
             status_code=400,
@@ -983,13 +1036,17 @@ def export_serve_file(path: str = Query(..., description="Absolute path under ex
         ".mid": "audio/midi",
         ".midi": "audio/midi",
     }.get(ext, "application/octet-stream")
+    # attachment helps Chromium DownloadURL treat this as a real file drop
     return FileResponse(
         path=str(file_path),
         media_type=media,
         filename=file_path.name,
+        content_disposition_type="attachment",
         headers={
             "Cache-Control": "no-store",
             "Access-Control-Expose-Headers": "Content-Disposition",
+            # Allow cross-process drag fetch from the same origin page
+            "X-Content-Type-Options": "nosniff",
         },
     )
 
@@ -1054,7 +1111,22 @@ def export_select_in_explorer(body: ExportSelectRequest) -> dict[str, Any]:
 
 
 def _win_select_files(paths: list[Path]) -> bool:
-    """SHOpenFolderAndSelectItems — Explorer with multiple files selected."""
+    """
+    SHOpenFolderAndSelectItems — Explorer with files selected (ready to drag).
+
+    Child PIDLs must be *relative* to the folder PIDL (absolute file PIDLs fail silently).
+    """
+    if not paths:
+        return False
+    # All files must share one parent for multi-select
+    try:
+        parents = {str(p.expanduser().resolve().parent) for p in paths}
+    except OSError:
+        return False
+    if len(parents) != 1:
+        # Fall back to first file only
+        paths = paths[:1]
+
     try:
         import ctypes
         from ctypes import wintypes
@@ -1062,13 +1134,24 @@ def _win_select_files(paths: list[Path]) -> bool:
         shell32 = ctypes.windll.shell32  # type: ignore[attr-defined]
         ole32 = ctypes.windll.ole32  # type: ignore[attr-defined]
 
-        # PIDL from path
         ILCreateFromPathW = shell32.ILCreateFromPathW
         ILCreateFromPathW.argtypes = [wintypes.LPCWSTR]
         ILCreateFromPathW.restype = ctypes.c_void_p
 
         ILFree = shell32.ILFree
         ILFree.argtypes = [ctypes.c_void_p]
+
+        ILFindLastID = shell32.ILFindLastID
+        ILFindLastID.argtypes = [ctypes.c_void_p]
+        ILFindLastID.restype = ctypes.c_void_p
+
+        ILClone = shell32.ILClone
+        ILClone.argtypes = [ctypes.c_void_p]
+        ILClone.restype = ctypes.c_void_p
+
+        ILRemoveLastID = shell32.ILRemoveLastID
+        ILRemoveLastID.argtypes = [ctypes.c_void_p]
+        ILRemoveLastID.restype = wintypes.BOOL
 
         SHOpenFolderAndSelectItems = shell32.SHOpenFolderAndSelectItems
         SHOpenFolderAndSelectItems.argtypes = [
@@ -1080,28 +1163,72 @@ def _win_select_files(paths: list[Path]) -> bool:
         SHOpenFolderAndSelectItems.restype = ctypes.HRESULT
 
         ole32.CoInitialize(None)
-        folder_pidl = ILCreateFromPathW(str(paths[0].parent))
-        if not folder_pidl:
-            return False
-        child_pidls = []
+
+        # Build folder PIDL + relative children
+        folder_pidl = None
+        child_pidls: list[int] = []
+        abs_to_free: list[int] = []
         try:
             for p in paths:
-                pidl = ILCreateFromPathW(str(p))
-                if pidl:
-                    child_pidls.append(pidl)
-            if not child_pidls:
-                return False
+                abs_pidl = ILCreateFromPathW(str(p.resolve()))
+                if not abs_pidl:
+                    continue
+                abs_to_free.append(abs_pidl)
+                last = ILFindLastID(abs_pidl)
+                if not last:
+                    continue
+                rel = ILClone(last)
+                if not rel:
+                    continue
+                child_pidls.append(rel)
+                if folder_pidl is None:
+                    # Parent = full path with last ID removed
+                    folder_pidl = ILClone(abs_pidl)
+                    if folder_pidl:
+                        ILRemoveLastID(folder_pidl)
+
+            if not folder_pidl or not child_pidls:
+                # Last-resort: explorer /select,file (single)
+                try:
+                    subprocess.Popen(
+                        ["explorer", f"/select,{paths[0].resolve()}"],
+                        shell=False,
+                    )
+                    return True
+                except OSError:
+                    return False
+
             arr = (ctypes.c_void_p * len(child_pidls))(*child_pidls)
             hr = SHOpenFolderAndSelectItems(
                 folder_pidl, len(child_pidls), arr, 0
             )
-            return hr == 0
+            if hr == 0:
+                return True
+            # Fallback single select
+            try:
+                subprocess.Popen(
+                    ["explorer", f"/select,{paths[0].resolve()}"],
+                    shell=False,
+                )
+                return True
+            except OSError:
+                return False
         finally:
             for pidl in child_pidls:
                 ILFree(pidl)
-            ILFree(folder_pidl)
+            for pidl in abs_to_free:
+                ILFree(pidl)
+            if folder_pidl:
+                ILFree(folder_pidl)
     except Exception:
-        return False
+        try:
+            subprocess.Popen(
+                ["explorer", f"/select,{paths[0].resolve()}"],
+                shell=False,
+            )
+            return True
+        except Exception:
+            return False
 
 
 @app.post("/api/export")
@@ -1141,11 +1268,14 @@ def export_current_loop(body: ExportRequest) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
 
-    # Attach browser-fetchable URLs for drag-and-drop
+    # Attach browser-fetchable URLs for drag-and-drop (must encode path —
+    # raw Windows "C:\..." breaks Chromium DownloadURL, which splits on ':').
+    from urllib.parse import quote
+
     for f in manifest.get("files") or []:
         abs_path = f.get("abs_path")
         if abs_path:
-            f["url"] = f"/api/export/file?path={abs_path}"
+            f["url"] = f"/api/export/file?path={quote(str(abs_path), safe='')}"
 
     folder = manifest.get("folder")
     if body.open_folder and folder:

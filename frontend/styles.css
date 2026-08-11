@@ -1,10 +1,14 @@
-/* Reroll — By Austin Russell — dark studio UI */
+/* Reroll — By Austin Russell — themed studio UI */
 
-:root {
+/* Default = dark (also data-theme="dark") */
+:root,
+html[data-theme="dark"] {
   --bg: #0c0d10;
   --bg-elev: #14161c;
   --bg-slot: #1a1d26;
   --bg-slot-hover: #222632;
+  --bg-muted: #12141a;
+  --bg-muted-hover: #161920;
   --border: #2a2f3a;
   --border-strong: #3d4555;
   --text: #e8eaef;
@@ -16,9 +20,92 @@
   --warn: #fbbf24;
   --serum: #7dd3fc;
   --danger: #f87171;
+  --footer-bg: rgba(12, 13, 16, 0.94);
+  --overlay: rgba(0, 0, 0, 0.65);
+  --glow-a: rgba(110, 231, 183, 0.06);
+  --glow-b: rgba(125, 211, 252, 0.04);
   --radius: 10px;
   --font: "Segoe UI", system-ui, -apple-system, sans-serif;
   --mono: "Cascadia Code", "Consolas", ui-monospace, monospace;
+  color-scheme: dark;
+}
+
+/* Light — clean studio daylight */
+html[data-theme="light"] {
+  --bg: #f4f5f8;
+  --bg-elev: #ffffff;
+  --bg-slot: #eef0f5;
+  --bg-slot-hover: #e4e7ef;
+  --bg-muted: #e8eaef;
+  --bg-muted-hover: #dde1ea;
+  --border: #d0d5e0;
+  --border-strong: #a8b0c0;
+  --text: #1a1d26;
+  --text-dim: #5c6578;
+  --text-faint: #8b93a7;
+  --accent: #0d9488;
+  --accent-dim: #0f766e;
+  --accent-glow: rgba(13, 148, 136, 0.12);
+  --warn: #d97706;
+  --serum: #0284c7;
+  --danger: #dc2626;
+  --footer-bg: rgba(255, 255, 255, 0.92);
+  --overlay: rgba(15, 20, 30, 0.45);
+  --glow-a: rgba(13, 148, 136, 0.08);
+  --glow-b: rgba(2, 132, 199, 0.06);
+  color-scheme: light;
+}
+
+/* Neon — futuristic cyan / magenta on void */
+html[data-theme="neon"] {
+  --bg: #05060c;
+  --bg-elev: #0c0e1a;
+  --bg-slot: #101328;
+  --bg-slot-hover: #161a36;
+  --bg-muted: #080a14;
+  --bg-muted-hover: #0e1120;
+  --border: #1e2748;
+  --border-strong: #3d4d8a;
+  --text: #e8f0ff;
+  --text-dim: #8b9bcf;
+  --text-faint: #5a6a9a;
+  --accent: #22d3ee;
+  --accent-dim: #a855f7;
+  --accent-glow: rgba(34, 211, 238, 0.18);
+  --warn: #f0abfc;
+  --serum: #e879f9;
+  --danger: #fb7185;
+  --footer-bg: rgba(5, 6, 12, 0.94);
+  --overlay: rgba(0, 0, 10, 0.72);
+  --glow-a: rgba(34, 211, 238, 0.12);
+  --glow-b: rgba(168, 85, 247, 0.14);
+  color-scheme: dark;
+}
+
+/* Rainbow — maximal chaos */
+html[data-theme="rainbow"] {
+  --bg: #14081f;
+  --bg-elev: #1f0f33;
+  --bg-slot: #2a1445;
+  --bg-slot-hover: #3a1a5c;
+  --bg-muted: #1a0a2e;
+  --bg-muted-hover: #241040;
+  --border: #6b2d9b;
+  --border-strong: #ff6bcb;
+  --text: #fff8ff;
+  --text-dim: #ffc6ef;
+  --text-faint: #c4a0ff;
+  --accent: #39ff14;
+  --accent-dim: #00f0ff;
+  --accent-glow: rgba(255, 107, 203, 0.28);
+  --warn: #ffe600;
+  --serum: #00f0ff;
+  --danger: #ff3366;
+  --footer-bg: rgba(20, 8, 31, 0.92);
+  --overlay: rgba(20, 0, 40, 0.7);
+  --glow-a: rgba(255, 0, 128, 0.2);
+  --glow-b: rgba(0, 255, 200, 0.18);
+  color-scheme: dark;
 }
 
 *,
@@ -38,9 +125,128 @@ html, body {
 }
 
 body {
+  background-color: var(--bg);
   background-image:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(110, 231, 183, 0.06), transparent),
-    radial-gradient(ellipse 40% 30% at 100% 0%, rgba(125, 211, 252, 0.04), transparent);
+    radial-gradient(ellipse 80% 50% at 50% -20%, var(--glow-a), transparent),
+    radial-gradient(ellipse 40% 30% at 100% 0%, var(--glow-b), transparent);
+  transition: background-color 0.25s ease, color 0.2s ease;
+}
+
+html[data-theme="neon"] body {
+  background-image:
+    radial-gradient(ellipse 70% 45% at 15% 0%, rgba(34, 211, 238, 0.16), transparent 55%),
+    radial-gradient(ellipse 55% 40% at 95% 10%, rgba(168, 85, 247, 0.18), transparent 50%),
+    radial-gradient(ellipse 40% 30% at 50% 100%, rgba(236, 72, 153, 0.08), transparent 50%),
+    linear-gradient(180deg, #05060c 0%, #0a0c18 100%);
+  box-shadow: inset 0 0 80px rgba(34, 211, 238, 0.04);
+}
+
+html[data-theme="neon"] .brand-mark,
+html[data-theme="neon"] .btn.primary {
+  text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+html[data-theme="neon"] .slot:not(.muted) {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+html[data-theme="rainbow"] body {
+  background-color: #14081f;
+  background-image:
+    radial-gradient(circle at 10% 20%, rgba(255, 0, 128, 0.35), transparent 35%),
+    radial-gradient(circle at 90% 10%, rgba(0, 240, 255, 0.3), transparent 32%),
+    radial-gradient(circle at 50% 90%, rgba(57, 255, 20, 0.22), transparent 40%),
+    radial-gradient(circle at 70% 50%, rgba(255, 230, 0, 0.15), transparent 30%),
+    linear-gradient(
+      125deg,
+      #2b0a3d 0%,
+      #1a1040 25%,
+      #0d2040 50%,
+      #1a0a30 75%,
+      #301028 100%
+    );
+  background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 200% 200%;
+  animation: rainbow-bg 14s ease infinite;
+}
+
+@keyframes rainbow-bg {
+  0%, 100% { background-position: 0% 0%, 0% 0%, 0% 0%, 0% 0%, 0% 50%; }
+  50% { background-position: 0% 0%, 0% 0%, 0% 0%, 0% 0%, 100% 50%; }
+}
+
+html[data-theme="rainbow"] .brand-mark {
+  background: linear-gradient(90deg, #ff006e, #ffbe0b, #39ff14, #00f0ff, #c77dff, #ff006e);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: rainbow-text 4s linear infinite;
+}
+
+html[data-theme="rainbow"] .btn.primary {
+  background: linear-gradient(90deg, #ff006e, #ffbe0b, #39ff14, #00f0ff, #c77dff);
+  background-size: 200% auto;
+  border-color: transparent;
+  color: #14081f;
+  font-weight: 700;
+  animation: rainbow-text 5s linear infinite;
+}
+
+html[data-theme="rainbow"] .slot {
+  border-image: linear-gradient(90deg, #ff006e, #ffbe0b, #39ff14, #00f0ff, #c77dff) 1;
+  border-width: 1px;
+  border-style: solid;
+}
+
+html[data-theme="rainbow"] .slot.serum {
+  border-left-width: 3px;
+  border-image: linear-gradient(180deg, #00f0ff, #ff006e, #39ff14) 1;
+}
+
+@keyframes rainbow-text {
+  to { background-position: 200% center; }
+}
+
+/* Theme picker in Options */
+.options-theme-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-slot);
+  border: 1px solid var(--border);
+}
+
+.options-theme-row:hover {
+  background: var(--bg-slot-hover);
+}
+
+.options-theme-row .options-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.options-theme-select {
+  min-width: 140px;
+  max-width: 200px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.options-theme-select:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 .app {
@@ -341,6 +547,10 @@ body {
 
 /* Buttons */
 .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   border: 1px solid var(--border);
   background: var(--bg-slot);
   color: var(--text);
@@ -606,7 +816,7 @@ body {
 
 .slot {
   display: grid;
-  grid-template-columns: 64px 1fr auto;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   padding: 10px 12px;
@@ -621,8 +831,13 @@ body {
   border-color: var(--border-strong);
 }
 
+/* 4 columns whenever MIDI tools exist — don't depend only on .serum class */
+.slot.serum,
+.slot:has(.slot-serum-tools) {
+  grid-template-columns: 64px minmax(0, 1fr) auto auto;
+}
+
 .slot.serum {
-  grid-template-columns: 64px 1fr auto auto;
   border-left: 3px solid var(--serum);
 }
 
@@ -682,15 +897,15 @@ body {
 .slot.muted {
   opacity: 0.48;
   filter: grayscale(0.85);
-  border-color: #2a2f3a;
+  border-color: var(--border);
   box-shadow: none;
-  background: #12141a;
+  background: var(--bg-muted);
 }
 
 .slot.muted:hover {
   opacity: 0.62;
-  border-color: #3d4555;
-  background: #161920;
+  border-color: var(--border-strong);
+  background: var(--bg-muted-hover);
 }
 
 .slot.muted .slot-name,
@@ -751,7 +966,8 @@ body {
 }
 
 .slot-body {
-  min-width: 0; /* allow flex shrink so long names ellipsis instead of shoving icons */
+  min-width: 0; /* allow shrink so long names/meta ellipsis instead of shoving icons */
+  overflow: hidden;
 }
 
 .slot-name {
@@ -775,6 +991,7 @@ body {
   display: flex;
   gap: 4px;
   flex-shrink: 0;
+  flex-wrap: nowrap;
 }
 
 .icon-btn {
@@ -869,14 +1086,24 @@ body {
 
 .transport-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
   margin-bottom: 8px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .transport-row .btn {
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  width: 50%;
   min-width: 0;
+  max-width: calc(50% - 4px);
+  box-sizing: border-box;
+  justify-content: center;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .transport-row-secondary {
@@ -925,25 +1152,23 @@ body {
   gap: 8px;
   padding: 12px 10px;
   margin-bottom: 8px;
-  border: 1px dashed rgba(110, 231, 183, 0.45);
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border));
   border-radius: 8px;
-  background: rgba(110, 231, 183, 0.08);
+  background: var(--accent-glow);
   color: var(--accent);
   font-weight: 600;
   font-size: 0.85rem;
-  cursor: grab;
+  cursor: pointer;
   user-select: none;
   transition: background 0.15s, border-color 0.15s, transform 0.1s;
 }
 
 .export-drag-all:hover {
-  background: rgba(110, 231, 183, 0.14);
   border-color: var(--accent-dim);
+  filter: brightness(1.08);
 }
 
-.export-drag-all:active,
-.export-drag-all.is-dragging {
-  cursor: grabbing;
+.export-drag-all:active {
   transform: scale(0.99);
   opacity: 0.9;
 }
@@ -969,7 +1194,7 @@ body {
   color: var(--text-dim);
   font-size: 0.72rem;
   font-family: var(--mono);
-  cursor: grab;
+  cursor: pointer;
   user-select: none;
   white-space: nowrap;
   overflow: hidden;
@@ -979,16 +1204,16 @@ body {
 .export-chip:hover {
   border-color: var(--accent-dim);
   color: var(--accent);
-  background: rgba(110, 231, 183, 0.08);
+  background: var(--accent-glow);
 }
 
 .export-chip.is-midi {
-  border-color: rgba(125, 211, 252, 0.35);
+  border-color: color-mix(in srgb, var(--serum) 45%, var(--border));
   color: var(--serum);
 }
 
 .export-chip:active {
-  cursor: grabbing;
+  transform: scale(0.98);
 }
 
 .export-drop-actions {
@@ -1159,6 +1384,48 @@ body {
   word-break: break-all;
 }
 
+.lib-roots {
+  margin: 0 0 10px;
+  max-height: 7.5rem;
+  overflow: auto;
+}
+
+.lib-roots .path.mono {
+  margin: 0 0 4px;
+}
+
+.lib-dialog textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 4rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-slot);
+  color: var(--text);
+}
+
+.lib-dialog textarea:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+}
+
+.lib-defaults {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.lib-defaults .hint {
+  margin: 0 0 6px;
+}
+
 /* Footer — docked help/status bar (always visible while scrolling) */
 .footer {
   position: fixed;
@@ -1177,7 +1444,7 @@ body {
   box-sizing: border-box;
   padding: 10px 24px calc(10px + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid var(--border);
-  background: rgba(12, 13, 16, 0.94);
+  background: var(--footer-bg);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);

@@ -18,12 +18,19 @@ const state = {
     serum2: true,
     /** instrument id → enabled for default track stack */
     instruments: {},
+    /** Extra folders beyond Splice / Xfer defaults */
+    sampleRoots: [],
+    serumRoots: [],
+    /** UI theme: dark | light | neon | rainbow */
+    theme: "dark",
   },
   /** Last saved loop id (for optional overwrite context) */
   currentLoopId: null,
   /** Last saved / loaded display name */
   currentLoopName: null,
 };
+
+const THEME_IDS = ["dark", "light", "neon", "rainbow"];
 
 /**
  * Options → Default instruments (order = track stack order).
@@ -2394,7 +2401,12 @@ function applySlot(role, data) {
 
   slot.classList.toggle("optional", Boolean(data.empty));
   slot.classList.toggle("locked", locked);
-  slot.classList.toggle("serum", data.kind === "serum");
+  // Keep serum chrome for serum *tracks* even when empty / no catalog match
+  // (otherwise 4-col layout collapses and action buttons wrap to the next line).
+  slot.classList.toggle(
+    "serum",
+    data.kind === "serum" || isSerumType(keepTrackType) || isSerumTrack(role)
+  );
   slot.classList.toggle("has-midi", Boolean(state.slots[role]?.midi));
   syncMuteUi(role);
 
@@ -2430,6 +2442,66 @@ function lockedPayload() {
   return out;
 }
 
+function parseRootLines(text) {
+  return String(text || "")
+    .split(/[\n;|]+/)
+    .map((s) => s.trim().replace(/^["']|["']$/g, ""))
+    .filter(Boolean);
+}
+
+function rootsToTextarea(list) {
+  return (Array.isArray(list) ? list : []).join("\n");
+}
+
+function syncLibraryRootsUi(summary) {
+  const dSample = summary?.default_sample_roots || [];
+  const dSerum = summary?.default_serum_roots || [];
+  const elS = $("#lib-default-sample");
+  const el1 = $("#lib-default-serum1");
+  const el2 = $("#lib-default-serum2");
+  if (elS) elS.textContent = dSample[0] || "—";
+  if (el1) el1.textContent = dSerum[0] || "—";
+  if (el2) el2.textContent = dSerum[1] || dSerum[0] || "—";
+
+  const extraS =
+    summary?.extra_sample_roots ?? state.options.sampleRoots ?? [];
+  const extraR =
+    summary?.extra_serum_roots ?? state.options.serumRoots ?? [];
+  const taS = $("#lib-extra-samples");
+  const taR = $("#lib-extra-serum");
+  if (taS) taS.value = rootsToTextarea(extraS);
+  if (taR) taR.value = rootsToTextarea(extraR);
+
+  const list = $("#lib-roots");
+  if (list) {
+    const roots = [
+      ...(summary?.sample_roots || []),
+      ...(summary?.serum_roots || []),
+    ];
+    list.innerHTML = "";
+    for (const r of roots) {
+      const p = document.createElement("p");
+      p.className = "path mono";
+      p.textContent = r;
+      list.appendChild(p);
+    }
+    if (!roots.length) {
+      const p = document.createElement("p");
+      p.className = "path mono";
+      p.textContent = "No roots scanned yet";
+      list.appendChild(p);
+    }
+  }
+}
+
+function readLibraryRootsFromDom() {
+  const sampleRoots = parseRootLines($("#lib-extra-samples")?.value);
+  const serumRoots = parseRootLines($("#lib-extra-serum")?.value);
+  state.options.sampleRoots = sampleRoots;
+  state.options.serumRoots = serumRoots;
+  return { sampleRoots, serumRoots };
+}
+
 function renderLibrary(summary) {
   if (!summary) return;
   const set = (id, val) => {
@@ -2461,11 +2533,13 @@ function renderLibrary(summary) {
     }
   }
 
-  const paths = $all(".library-panel .path.mono");
-  const roots = [...(summary.sample_roots || []), ...(summary.serum_roots || [])];
-  paths.forEach((el, i) => {
-    if (roots[i]) el.textContent = roots[i];
-  });
+  if (Array.isArray(summary.extra_sample_roots)) {
+    state.options.sampleRoots = [...summary.extra_sample_roots];
+  }
+  if (Array.isArray(summary.extra_serum_roots)) {
+    state.options.serumRoots = [...summary.extra_serum_roots];
+  }
+  syncLibraryRootsUi(summary);
 
   if (summary.serum_categories) {
     populateSerumTypeSelects(summary.serum_categories);
@@ -2474,6 +2548,7 @@ function renderLibrary(summary) {
 
 async function loadLibrary() {
   const summary = await api("/api/library");
+  window.__lastLibrarySummary = summary;
   renderLibrary(summary);
   if (summary.last_error) {
     setStatus(`Library loaded with warnings: ${summary.last_error}`);
@@ -2491,13 +2566,23 @@ async function loadLibrary() {
 async function doScan() {
   setStatus("Scanning library…");
   bufferCache.clear();
+  // Persist roots first so scan sees extras
+  readLibraryRootsFromDom();
+  try {
+    await persistUserSettings();
+  } catch (e) {
+    console.warn("settings save before scan failed:", e.message || e);
+  }
   const summary = await api("/api/scan", { method: "POST", body: "{}" });
+  window.__lastLibrarySummary = summary;
   renderLibrary(summary);
+  const warn = summary.last_error ? ` · ⚠ ${summary.last_error}` : "";
   setStatus(
     `Scan complete · ${summary.sample_count} samples · ${summary.serum_count} Serum` +
       (summary.serum2_count != null
         ? ` (${summary.serum1_count || 0} v1 + ${summary.serum2_count || 0} v2)`
-        : "")
+        : "") +
+      warn
   );
   return summary;
 }
@@ -2683,6 +2768,24 @@ function syncFilterFactorySerumUi() {
   if (el) el.checked = Boolean(state.options.filterFactorySerum);
 }
 
+function normalizeTheme(id) {
+  const t = String(id || "dark").toLowerCase().trim();
+  return THEME_IDS.includes(t) ? t : "dark";
+}
+
+/** Apply theme to <html data-theme> + Options select. */
+function applyTheme(id) {
+  const theme = normalizeTheme(id);
+  state.options.theme = theme;
+  document.documentElement.setAttribute("data-theme", theme);
+  const sel = $("#opt-theme");
+  if (sel && sel.value !== theme) sel.value = theme;
+}
+
+function syncThemeUi() {
+  applyTheme(state.options.theme || "dark");
+}
+
 function setOptionsPanelOpen(open) {
   const panel = $("#options-panel");
   const btn = $("#btn-options");
@@ -2701,6 +2804,12 @@ function collectUserSettings() {
   if (facEl) state.options.filterFactorySerum = Boolean(facEl.checked);
   ensureInstrumentsState();
   readInstrumentsFromDom();
+  // Prefer live dialog values when present
+  if ($("#lib-extra-samples") || $("#lib-extra-serum")) {
+    readLibraryRootsFromDom();
+  }
+  const themeEl = $("#opt-theme");
+  if (themeEl) state.options.theme = normalizeTheme(themeEl.value);
   return {
     bpm: getBpm(),
     key: $("#key")?.value || "F minor",
@@ -2710,6 +2819,9 @@ function collectUserSettings() {
     serum1: state.options.serum1 !== false,
     serum2: state.options.serum2 !== false,
     instruments: { ...state.options.instruments },
+    sampleRoots: [...(state.options.sampleRoots || [])],
+    serumRoots: [...(state.options.serumRoots || [])],
+    theme: normalizeTheme(state.options.theme),
   };
 }
 
@@ -2751,9 +2863,29 @@ function applyUserSettings(s) {
     ensureInstrumentsState();
   }
   ensureInstrumentsState();
+  state.options.sampleRoots = Array.isArray(s.sampleRoots)
+    ? s.sampleRoots.map(String).filter(Boolean)
+    : [];
+  state.options.serumRoots = Array.isArray(s.serumRoots)
+    ? s.serumRoots.map(String).filter(Boolean)
+    : [];
+  state.options.theme = normalizeTheme(s.theme);
+  syncLibraryRootsUi({
+    extra_sample_roots: state.options.sampleRoots,
+    extra_serum_roots: state.options.serumRoots,
+    default_sample_roots: null,
+    default_serum_roots: null,
+    sample_roots: null,
+    serum_roots: null,
+  });
+  // Re-fill defaults/scanned roots from last library summary if available
+  if (window.__lastLibrarySummary) {
+    syncLibraryRootsUi(window.__lastLibrarySummary);
+  }
   syncSerumEngineOptionsUi();
   syncFilterFactorySerumUi();
   syncInstrumentCheckboxesUi();
+  syncThemeUi();
 }
 
 let settingsSaveTimer = null;
@@ -4515,6 +4647,20 @@ function initUiChrome() {
   };
   $("#opt-serum1")?.addEventListener("change", onSerumOpt);
   $("#opt-serum2")?.addEventListener("change", onSerumOpt);
+  $("#opt-theme")?.addEventListener("change", (ev) => {
+    const theme = normalizeTheme(ev.target.value);
+    applyTheme(theme);
+    const labels = {
+      dark: "Dark",
+      light: "Light",
+      neon: "Neon",
+      rainbow: "Rainbow",
+    };
+    setStatus(`Theme · ${labels[theme] || theme}`);
+    scheduleSaveUserSettings({ immediate: true });
+  });
+  // Default until settings load
+  applyTheme(state.options.theme || "dark");
   syncSerumEngineOptionsUi();
   syncFilterFactorySerumUi();
 
@@ -4593,7 +4739,17 @@ function initUiChrome() {
   });
 
   const dialog = $("#library-dialog");
-  $("#btn-library")?.addEventListener("click", () => dialog?.showModal());
+  $("#btn-library")?.addEventListener("click", () => {
+    if (window.__lastLibrarySummary) {
+      syncLibraryRootsUi(window.__lastLibrarySummary);
+    } else {
+      syncLibraryRootsUi({
+        extra_sample_roots: state.options.sampleRoots,
+        extra_serum_roots: state.options.serumRoots,
+      });
+    }
+    dialog?.showModal();
+  });
   $("#dialog-scan")?.addEventListener("click", () => {
     doScan()
       .then(() => dialog?.close())
@@ -4602,6 +4758,13 @@ function initUiChrome() {
   $("#btn-rescan")?.addEventListener("click", () => {
     doScan().catch((e) => setStatus(`Scan failed: ${e.message}`));
   });
+  // Keep extras in state as user types (debounced save with other prefs)
+  for (const id of ["#lib-extra-samples", "#lib-extra-serum"]) {
+    $(id)?.addEventListener("change", () => {
+      readLibraryRootsFromDom();
+      scheduleSaveUserSettings();
+    });
+  }
   $("#btn-export-panel")?.addEventListener("click", () => {
     doExportLoop().catch((e) => setStatus(`Export failed: ${e.message || e}`));
   });
@@ -4620,11 +4783,9 @@ function initUiChrome() {
 
 /** @type {{ files: object[], folder: string|null, dropFolder: string|null } | null} */
 let lastExport = null;
-/** @type {File[]} */
-let exportDragFiles = [];
 
 /**
- * Export current session → flat files + drag tray for Ableton.
+ * Export current session → flat files + Explorer tray for Ableton.
  * Also mirrors to ABLETON_DROP and Live User Library / Reroll.
  */
 async function doExportLoop() {
@@ -4702,53 +4863,96 @@ async function doExportLoop() {
     renderExportDropTray(result, files);
     const n = files.length;
     const errs = Array.isArray(result.errors) ? result.errors.length : 0;
-    let msg = `Ready to drag into Live · ${n} clip${n === 1 ? "" : "s"}`;
-    if (result.user_library_folder) msg += " · also in User Library → Reroll";
+    let msg = `Exported ${n} clip${n === 1 ? "" : "s"}`;
+    if (result.user_library_folder) msg += " · also in Live User Library → Samples → Reroll";
     if (errs) msg += ` · ${errs} warning${errs === 1 ? "" : "s"}`;
     setStatus(msg);
-    // Prefetch in background for smoother drag
-    prepareExportDragFiles(files)
-      .then(() => {
-        if (exportDragFiles.length) {
-          setStatus(`${msg} · drag ready`);
-        }
-      })
-      .catch(() => {});
+    // Browsers cannot hand real filesystem files to Ableton (🚫). Open Explorer
+    // with clips selected so you drag OS files into Live.
+    if (n > 0) {
+      // Audio only — multi-drop creates one Live track per file named Kick/Bass/…
+      selectExportInExplorer({ audioOnly: true })
+        .then(() => {
+          setStatus(
+            `${msg} · Explorer: audio selected — drop BELOW tracks (empty area) for one track each`
+          );
+        })
+        .catch((e) => {
+          setStatus(
+            `${msg} · Select in Explorer, drop on empty Live area (${e.message || e})`
+          );
+        });
+    }
     return result;
   } finally {
     endTransportBusy();
   }
 }
 
-function exportFileUrl(f) {
-  if (f.url) {
-    // Ensure absolute for DownloadURL
-    if (f.url.startsWith("http")) return f.url;
-    return `${window.location.origin}${f.url.startsWith("/") ? "" : "/"}${f.url}`;
+/**
+ * Browser → Ableton drag is not reliable (Live needs real OS file paths).
+ * Select files in Explorer, then drag into Live.
+ *
+ * @param {string[] | { paths?: string[], audioOnly?: boolean } | null} opts
+ */
+async function selectExportInExplorer(opts = null) {
+  let pathsOverride = null;
+  let audioOnly = false;
+  if (Array.isArray(opts)) {
+    pathsOverride = opts;
+  } else if (opts && typeof opts === "object") {
+    pathsOverride = opts.paths || null;
+    audioOnly = Boolean(opts.audioOnly);
   }
-  if (f.abs_path) {
-    return `${window.location.origin}/api/export/file?path=${encodeURIComponent(f.abs_path)}`;
+
+  if (!lastExport?.files?.length && !pathsOverride?.length) {
+    setStatus("Export first");
+    return null;
   }
-  return null;
+
+  let paths = pathsOverride;
+  if (!paths) {
+    let list = lastExport.files || [];
+    if (audioOnly) {
+      list = list.filter(
+        (f) =>
+          f.role === "audio" ||
+          (!f.role && !String(f.name || "").toLowerCase().endsWith(".mid"))
+      );
+    }
+    paths = list.map((f) => f.abs_path).filter(Boolean);
+  }
+  if (!paths.length) {
+    setStatus(
+      audioOnly
+        ? "No audio stems — export may have failed (Serum bounce?)"
+        : "No export file paths — try Open folder"
+    );
+    return null;
+  }
+  const result = await api("/api/export/select", {
+    method: "POST",
+    body: JSON.stringify({
+      paths,
+      folder: lastExport?.dropFolder || lastExport?.folder,
+    }),
+  });
+  const n = result.selected || 0;
+  setStatus(
+    n > 0
+      ? `Explorer: ${n} file${n === 1 ? "" : "s"} selected — drop on EMPTY Live area (below tracks) for one track each`
+      : `Opened ${result.folder || "folder"} — select files and drop on empty Live area`
+  );
+  return result;
 }
 
-async function prepareExportDragFiles(files) {
-  exportDragFiles = [];
-  const list = Array.isArray(files) ? files : [];
-  for (const f of list) {
-    const url = exportFileUrl(f);
-    const name = f.name || f.file || "clip";
-    if (!url) continue;
-    try {
-      const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) continue;
-      const blob = await res.blob();
-      const mime = f.mime || blob.type || "application/octet-stream";
-      exportDragFiles.push(new File([blob], name, { type: mime }));
-    } catch (e) {
-      console.warn("export drag prefetch failed", name, e);
-    }
+async function selectOneExportFile(index) {
+  const meta = lastExport?.files?.[index];
+  if (!meta?.abs_path) {
+    setStatus("Export first");
+    return;
   }
+  await selectExportInExplorer({ paths: [meta.abs_path] });
 }
 
 function renderExportDropTray(result, files) {
@@ -4780,16 +4984,18 @@ function renderExportDropTray(result, files) {
     chip.type = "button";
     chip.className =
       "export-chip" + (f.role === "midi" || f.kind === "midi" ? " is-midi" : "");
-    chip.draggable = true;
+    // Not draggable — browser→Live always 🚫; click opens Explorer with this file
+    chip.draggable = false;
     chip.textContent = f.name || f.file || `clip ${i + 1}`;
-    chip.title = "Drag into Ableton Live";
+    chip.title = "Click → select in Explorer, then drag into Ableton";
     chip.dataset.idx = String(i);
-    chip.addEventListener("dragstart", (ev) => {
-      onExportChipDragStart(ev, i);
+    chip.addEventListener("click", () => {
+      selectOneExportFile(i).catch((e) =>
+        setStatus(`Select failed: ${e.message || e}`)
+      );
     });
     chips.appendChild(chip);
   });
-  // Ensure side panel is visible and tray is on screen
   try {
     panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
   } catch {
@@ -4797,120 +5003,27 @@ function renderExportDropTray(result, files) {
   }
 }
 
-function onExportChipDragStart(ev, index) {
-  const file = exportDragFiles[index];
-  const meta = lastExport?.files?.[index];
-  const dt = ev.dataTransfer;
-  if (!dt) return;
-  dt.effectAllowed = "copy";
-  try {
-    dt.clearData();
-  } catch {
-    /* ok */
-  }
-  if (file) {
-    try {
-      dt.items.add(file);
-    } catch {
-      /* older browsers */
-    }
-  }
-  // Chromium → external apps (Ableton): DownloadURL mime:name:url
-  const url = meta ? exportFileUrl(meta) : null;
-  const name = file?.name || meta?.name || "clip.wav";
-  const mime = file?.type || meta?.mime || "application/octet-stream";
-  if (url) {
-    try {
-      dt.setData("DownloadURL", `${mime}:${name}:${url}`);
-    } catch {
-      /* ok */
-    }
-    try {
-      dt.setData("text/uri-list", url);
-      dt.setData("text/plain", url);
-    } catch {
-      /* ok */
-    }
-  }
-  ev.currentTarget?.classList.add("is-dragging");
-  const clear = () => {
-    ev.currentTarget?.classList.remove("is-dragging");
-    window.removeEventListener("dragend", clear);
-  };
-  window.addEventListener("dragend", clear);
-}
-
 function bindExportDragAll() {
   const el = $("#export-drag-all");
   if (!el || el.dataset.bound) return;
   el.dataset.bound = "1";
-  el.addEventListener("dragstart", (ev) => {
-    const dt = ev.dataTransfer;
-    if (!dt || !exportDragFiles.length) {
-      ev.preventDefault();
-      setStatus("Export first, then drag into Live");
-      return;
-    }
-    dt.effectAllowed = "copy";
-    try {
-      dt.clearData();
-    } catch {
-      /* ok */
-    }
-    // Prefer multi-file File list when the browser allows it
-    let added = 0;
-    for (const file of exportDragFiles) {
-      try {
-        dt.items.add(file);
-        added += 1;
-      } catch {
-        break;
-      }
-    }
-    // Also set first DownloadURL (Chromium often only honors one for OS drops)
-    const meta0 = lastExport?.files?.[0];
-    const url0 = meta0 ? exportFileUrl(meta0) : null;
-    if (url0 && exportDragFiles[0]) {
-      try {
-        dt.setData(
-          "DownloadURL",
-          `${exportDragFiles[0].type || "application/octet-stream"}:${exportDragFiles[0].name}:${url0}`
-        );
-      } catch {
-        /* ok */
-      }
-    }
-    el.classList.add("is-dragging");
-    setStatus(
-      added > 1
-        ? `Dragging ${added} clips — drop on Live Session/Arrangement`
-        : "Dragging… if Live only gets one file, use Select in Explorer"
+  el.draggable = false;
+  el.removeAttribute("draggable");
+  const openAll = () => {
+    // Prefer audio stems so multi-drop → one audio track per role (Kick, Bass, …)
+    selectExportInExplorer({ audioOnly: true }).catch((e) =>
+      setStatus(`Select in Explorer failed: ${e.message || e}`)
     );
+  };
+  el.addEventListener("click", openAll);
+  el.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      openAll();
+    }
   });
-  el.addEventListener("dragend", () => {
-    el.classList.remove("is-dragging");
-  });
-}
-
-async function selectExportInExplorer() {
-  if (!lastExport?.files?.length) {
-    setStatus("Export first");
-    return;
-  }
-  const paths = lastExport.files.map((f) => f.abs_path).filter(Boolean);
-  const result = await api("/api/export/select", {
-    method: "POST",
-    body: JSON.stringify({
-      paths,
-      folder: lastExport.dropFolder || lastExport.folder,
-    }),
-  });
-  const n = result.selected || 0;
-  setStatus(
-    n > 0
-      ? `Explorer: ${n} files selected — drag them into Live`
-      : `Opened ${result.folder || "folder"} — select files and drag into Live`
-  );
+  el.tabIndex = 0;
+  el.setAttribute("role", "button");
 }
 
 async function init() {

@@ -114,7 +114,7 @@ py -3.12 -m pytest tests/host -m serum -q
 
 ## Library roots
 
-On scan, the app looks under your user profile (typical installs):
+On scan, the app always includes these defaults (typical installs):
 
 | Kind | Path |
 |------|------|
@@ -122,7 +122,13 @@ On scan, the app looks under your user profile (typical installs):
 | Serum 1 | `%USERPROFILE%\Documents\Xfer\Serum Presets\Presets` |
 | Serum 2 | `%USERPROFILE%\Documents\Xfer\Serum 2 Presets\Presets` |
 
-Rescan anytime from the **Library** UI or `POST /api/scan`. Catalog is in-memory only (restart = rescan on startup).
+**Extra folders** (Google Drive, curated dumps, etc.) go in `user_settings.json` as `sampleRoots` / `serumRoots`, or edit them under **Library** in the UI (Save & Scan).
+
+```json
+"serumRoots": ["G:\\Other computers\\Snowy\\music\\serum presets"]
+```
+
+Remote / File Stream paths work if Windows can open the files (online-only placeholders may fail or be slow). Rescan anytime from **Library** or `POST /api/scan`. Catalog loads from `library.db` on startup when present; Rescan re-walks disk.
 
 ---
 
@@ -269,7 +275,7 @@ Fallback: **Select in Explorer** (files pre-selected) → drag into Live.
 
 **Next (rough):** style/pack-aware generate, Ableton `.als` project gen, “more like this”, richer library browser UI.
 
-**Non-goals for now:** full song arrangement, cloud libraries, shipping or cracking Serum.
+**Non-goals for now:** full song arrangement, cloud libraries, shipping Serum.
 
 ---
 

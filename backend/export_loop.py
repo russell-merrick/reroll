@@ -135,6 +135,7 @@ def export_loop(
         display = str(t.get("name") or Path(str(path or "")).name or tid)
         kind = str(t.get("kind") or ("serum" if _is_serum_path(path) else "sample"))
         midi_state = t.get("midi") if isinstance(t.get("midi"), dict) else None
+        # Prefer sample/preset name so Live multi-import track names match the sound
         label_stem = f"{tid}_{_safe_stem(display, ttype)}"
 
         # --- Audio ---
@@ -197,28 +198,83 @@ def export_loop(
                 except Exception as exc:
                     errors.append(f"{tid}: Serum export error · {exc}")
         elif path and Path(path).is_file():
+            # Render full session loop (patterns / phrase beds), not a single one-shot file
+            src = Path(path)
+            fname = next_name(label_stem, ".wav")
+            dest = folder / fname
             try:
-                src = Path(path)
-                ext = src.suffix.lower() or ".wav"
-                fname = next_name(label_stem, ext)
-                dest = folder / fname
-                shutil.copy2(src, dest)
-                written.append(dest)
-                files_out.append(
-                    {
-                        "track": tid,
-                        "type": ttype,
-                        "kind": "sample",
-                        "role": "audio",
-                        "name": fname,
-                        "file": fname,
-                        "abs_path": str(dest.resolve()),
-                        "mime": _mime_for(dest),
-                        "source": str(src.resolve()),
-                    }
+                from .render_sample_loop import render_sample_loop
+
+                rendered = render_sample_loop(
+                    src,
+                    dest,
+                    track_type=ttype,
+                    bpm=bpm,
+                    bars=bars,
+                    name_blob=f"{display} {src.name}",
                 )
-            except OSError as exc:
-                errors.append(f"{tid}: copy failed · {exc}")
+                if rendered.get("ok") and dest.is_file():
+                    written.append(dest)
+                    files_out.append(
+                        {
+                            "track": tid,
+                            "type": ttype,
+                            "kind": "sample_loop",
+                            "role": "audio",
+                            "name": fname,
+                            "file": fname,
+                            "abs_path": str(dest.resolve()),
+                            "mime": "audio/wav",
+                            "source": str(src.resolve()),
+                            "render_mode": rendered.get("mode"),
+                            "duration_sec": rendered.get("duration_sec"),
+                        }
+                    )
+                else:
+                    # Fallback: copy original one-shot if offline render fails
+                    err = rendered.get("error") or "render failed"
+                    errors.append(f"{tid}: loop render failed ({err}) — copied raw sample")
+                    ext = src.suffix.lower() or ".wav"
+                    fname2 = next_name(label_stem, ext)
+                    dest2 = folder / fname2
+                    shutil.copy2(src, dest2)
+                    written.append(dest2)
+                    files_out.append(
+                        {
+                            "track": tid,
+                            "type": ttype,
+                            "kind": "sample",
+                            "role": "audio",
+                            "name": fname2,
+                            "file": fname2,
+                            "abs_path": str(dest2.resolve()),
+                            "mime": _mime_for(dest2),
+                            "source": str(src.resolve()),
+                        }
+                    )
+            except Exception as exc:
+                errors.append(f"{tid}: loop render error · {exc}")
+                try:
+                    ext = src.suffix.lower() or ".wav"
+                    fname2 = next_name(label_stem, ext)
+                    dest2 = folder / fname2
+                    shutil.copy2(src, dest2)
+                    written.append(dest2)
+                    files_out.append(
+                        {
+                            "track": tid,
+                            "type": ttype,
+                            "kind": "sample",
+                            "role": "audio",
+                            "name": fname2,
+                            "file": fname2,
+                            "abs_path": str(dest2.resolve()),
+                            "mime": _mime_for(dest2),
+                            "source": str(src.resolve()),
+                        }
+                    )
+                except OSError as exc2:
+                    errors.append(f"{tid}: copy failed · {exc2}")
         elif path:
             errors.append(f"{tid}: missing file · {path}")
         elif kind == "serum":
@@ -300,8 +356,9 @@ def export_loop(
         "midi": midi_out,
         "errors": errors,
         "hint": (
-            "Drag chips from the app into an open Live set, "
-            "or drag from Live’s browser: Places → User Library → Samples → Reroll"
+            "Select audio in Explorer, then drop BELOW existing tracks "
+            "(or empty Session area) so Live makes one track per file. "
+            "Track names follow sample/preset filenames."
         ),
     }
     (folder / "manifest.json").write_text(
@@ -313,9 +370,15 @@ def export_loop(
                 f"Loop export · {manifest['name']}",
                 f"{int(bpm)} BPM · {key} · {style} · {bars} bars",
                 "",
-                "EASIEST: In Reroll, drag the chips into your open Ableton set.",
-                "Or: Live browser → User Library → Samples → Reroll (after export).",
-                "Or: Select all files in this folder / ABLETON_DROP and drag into Live.",
+                "ONE TRACK PER FILE (Ableton):",
+                "  1. In Reroll: Export → Explorer opens with .wav selected",
+                "  2. Drag onto EMPTY space in Session/Arrangement",
+                "     (below/right of tracks — NOT onto one track)",
+                "  3. Live creates one track per file; names follow the sample filenames",
+                "",
+                "If everything lands on one track: undo, drop lower / on empty area.",
+                "",
+                "Also: Live browser → User Library → Samples → Reroll",
                 "",
                 f"Files: {len(files_out)}",
                 *(f"WARN: {e}" for e in errors),

@@ -13,19 +13,20 @@ AUDIO_EXTS = {".wav", ".aif", ".aiff", ".flac"}
 SERUM_EXTS = {".fxp", ".serumpreset"}
 
 # role -> patterns matched against "path + name" (lowercase)
+# Note: pack dumps often use `_Bass_` / `_BA_` — `_` is a word char, so avoid bare `\bbass`.
 ROLE_RULES: list[tuple[str, re.Pattern[str]]] = [
     ("kick", re.compile(r"\bkick|\bbd\b|bassdrum|bass_drum")),
     ("clap", re.compile(r"\bclap")),
     ("snare", re.compile(r"\bsnare|\bsd\b")),
     ("hats", re.compile(r"\bhi[-_]?hat|\bhats?\b|\bhh\b|\bclosed[-_]?hat|\bopen[-_]?hat|\bcymbal|\bride\b")),
     ("perc", re.compile(r"\bperc|\btom\b|\brim\b|\bshaker|\bconga|\bbongo|\bclave|\bcowbell|\bdrum")),
-    ("bass", re.compile(r"\bbass|\bsub\b|\b808\b")),
-    ("lead", re.compile(r"\blead|\bacid\b|\bstab\b")),
-    ("pad", re.compile(r"\bpad\b|\batmos|\bdrone|\bpad_")),
-    ("vocal", re.compile(r"\bvocal|\bvox\b|\bvoice|\bchoir")),
-    ("fx", re.compile(r"\bfx\b|\briser|\bimpact|\bsweep|\bnoise|\bwhoosh|\btransition|\bfx_")),
-    ("loop", re.compile(r"\bloop")),
-    ("synth", re.compile(r"\bsynth|\bpluck|\bkeys?\b|\bchord|\barp")),
+    ("bass", re.compile(r"bass|\bsub\b|\b808\b|(?:^|[^a-z0-9])ba[_-]")),
+    ("lead", re.compile(r"lead|\bacid\b|\bstab\b|(?:^|[^a-z0-9])ld[_-]")),
+    ("pad", re.compile(r"(?:^|[^a-z0-9])pad(?:[^a-z0-9]|$)|atmos|\bdrone\b|(?:^|[^a-z0-9])pd[_-]")),
+    ("vocal", re.compile(r"vocal|\bvox\b|\bvoice|\bchoir")),
+    ("fx", re.compile(r"(?:^|[^a-z0-9])fx(?:[^a-z0-9]|$)|riser|impact|sweep|noise|whoosh|transition")),
+    ("loop", re.compile(r"loop")),
+    ("synth", re.compile(r"synth|pluck|\bkeys?\b|chord|\barp\b|(?:^|[^a-z0-9])ar[_-]")),
 ]
 
 # Serum parent-folder → role (Serum 1 + Serum 2 Factory category names)
@@ -105,6 +106,39 @@ DEFAULT_SERUM_ROOTS = [
 ]
 
 
+def _norm_root(path: Path | str) -> Path | None:
+    """Expand and resolve a root; return None if empty."""
+    s = str(path or "").strip()
+    if not s:
+        return None
+    try:
+        return Path(s).expanduser().resolve()
+    except OSError:
+        try:
+            return Path(s).expanduser()
+        except OSError:
+            return None
+
+
+def merge_scan_roots(
+    extras: list[str] | list[Path] | None,
+    defaults: list[Path],
+) -> list[Path]:
+    """Defaults first, then extra roots (deduped by resolved path)."""
+    out: list[Path] = []
+    seen: set[str] = set()
+    for raw in list(defaults) + list(extras or []):
+        p = _norm_root(raw)
+        if p is None:
+            continue
+        key = str(p).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
 def classify_sample(path: Path, root: Path) -> str:
     blob = str(path).lower().replace("\\", "/")
     name = path.name.lower()
@@ -137,7 +171,9 @@ def serum_category(path: Path, root: Path) -> str:
     """Stable category id for UI filter (bass, arp, lead, …)."""
     key = _serum_folder_key(path, root)
     if not key:
-        return ""
+        # Flat dumps (e.g. Google Drive folder): infer from filename
+        role = classify_sample(path, root)
+        return role if role not in ("", "unknown") else ""
     # Normalize aliases to the role/category we expose in the UI
     role = SERUM_FOLDER_ROLE.get(key, key)
     # Prefer friendly type names over coarse perc/pad collapses where useful
@@ -170,8 +206,10 @@ def classify_serum(path: Path, root: Path) -> str:
 def pack_name(path: Path, root: Path) -> str:
     try:
         rel = path.relative_to(root)
-        if rel.parts:
+        # Nested: first folder under root; flat file: root folder name
+        if len(rel.parts) >= 2:
             return rel.parts[0]
+        return root.name
     except ValueError:
         pass
     return path.parent.name
@@ -201,7 +239,7 @@ def serum_origin(path: Path, root: Path) -> str:
 
     - factory: stock Xfer banks (S1 categories, S2 Factory, S1 Presets reimports)
     - splice: Splice downloads folder
-    - user: User folder / other non-stock banks
+    - user: User folder / other non-stock banks (incl. custom roots)
     """
     try:
         rel = path.relative_to(root)
@@ -222,12 +260,20 @@ def serum_origin(path: Path, root: Path) -> str:
         return "factory"
     if pack in ("s1 presets", "s1 preset") or "/s1 presets/" in blob:
         return "factory"
-    # Serum 1: top-level category folders are factory
-    if path.suffix.lower() == ".fxp" and pack in SERUM1_FACTORY_PACKS:
-        return "factory"
-    if path.suffix.lower() == ".fxp" and pack and pack not in ("splice", "user"):
-        # Unknown top-level under S1 Presets — treat as factory-like stock
-        return "factory"
+
+    # Stock-folder heuristics only apply under Xfer's install trees
+    under_xfer = "xfer" in blob or any(
+        str(d).lower().replace("\\", "/") in blob
+        for d in DEFAULT_SERUM_ROOTS
+    )
+    if under_xfer:
+        # Serum 1: top-level category folders are factory
+        if path.suffix.lower() == ".fxp" and pack in SERUM1_FACTORY_PACKS:
+            return "factory"
+        if path.suffix.lower() == ".fxp" and pack and pack not in ("splice", "user"):
+            # Unknown top-level under S1 Presets — treat as factory-like stock
+            return "factory"
+    # Custom roots (Drive dumps, curated banks) → user so filter-factory keeps them
     return "user"
 
 
@@ -311,9 +357,20 @@ def scan_library(
     catalog: Catalog,
     sample_roots: list[Path] | None = None,
     serum_roots: list[Path] | None = None,
+    *,
+    extra_sample_roots: list[str] | list[Path] | None = None,
+    extra_serum_roots: list[str] | list[Path] | None = None,
 ) -> Catalog:
-    sample_roots = sample_roots or DEFAULT_SAMPLE_ROOTS
-    serum_roots = serum_roots or DEFAULT_SERUM_ROOTS
+    """
+    Walk sample + Serum roots into catalog.
+
+    If sample_roots / serum_roots are omitted, use defaults plus optional extras
+    (user-configured folders, e.g. Google Drive preset dumps).
+    """
+    if sample_roots is None:
+        sample_roots = merge_scan_roots(extra_sample_roots, DEFAULT_SAMPLE_ROOTS)
+    if serum_roots is None:
+        serum_roots = merge_scan_roots(extra_serum_roots, DEFAULT_SERUM_ROOTS)
     catalog.samples = []
     catalog.serum = []
     catalog.sample_roots = []
@@ -322,20 +379,24 @@ def scan_library(
 
     missing: list[str] = []
     for root in sample_roots:
-        root = root.expanduser().resolve()
-        catalog.sample_roots.append(str(root))
-        if not root.is_dir():
-            missing.append(str(root))
+        n = _norm_root(root)
+        if n is None:
             continue
-        catalog.samples.extend(scan_audio_root(root))
+        catalog.sample_roots.append(str(n))
+        if not n.is_dir():
+            missing.append(str(n))
+            continue
+        catalog.samples.extend(scan_audio_root(n))
 
     for root in serum_roots:
-        root = root.expanduser().resolve()
-        catalog.serum_roots.append(str(root))
-        if not root.is_dir():
-            missing.append(str(root))
+        n = _norm_root(root)
+        if n is None:
             continue
-        catalog.serum.extend(scan_serum_root(root))
+        catalog.serum_roots.append(str(n))
+        if not n.is_dir():
+            missing.append(str(n))
+            continue
+        catalog.serum.extend(scan_serum_root(n))
 
     catalog.scanned = True
     if missing:

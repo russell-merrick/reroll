@@ -7,9 +7,23 @@ from pathlib import Path
 from backend.export_loop import export_loop
 
 
+def _tiny_wav(path: Path, ms: int = 30) -> None:
+    import struct
+    import wave
+
+    sr = 44100
+    n = max(1, int(sr * ms / 1000))
+    frames = b"".join(struct.pack("<h", 8000 if i % 16 < 8 else -8000) for i in range(n))
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(frames)
+
+
 def test_export_sample_and_midi_flat(tmp_path: Path):
     sample = tmp_path / "kick.wav"
-    sample.write_bytes(b"RIFF" + b"\x00" * 32)
+    _tiny_wav(sample, ms=30)
 
     grid = [None] * 16
     grid[0] = {"degree": 0, "length": 4, "vel": 100}
@@ -50,6 +64,15 @@ def test_export_sample_and_midi_flat(tmp_path: Path):
     for f in out["files"]:
         assert (folder / f["name"]).is_file()
         assert "audio/" not in f["file"] and "midi/" not in f.get("file", "")
+    # Sample/preset-based names (not generic Kick/Bass role labels)
+    wavs = [f["name"] for f in out["files"] if f["name"].endswith(".wav")]
+    assert any("kick" in n.lower() for n in wavs), wavs
+    mids = [f["name"] for f in out["files"] if f["name"].endswith(".mid")]
+    assert any("midi" in n.lower() for n in mids), mids
+    # Kick is full-loop stem, not raw one-shot copy
+    kick_audio = next(f for f in out["files"] if f.get("role") == "audio")
+    assert kick_audio["kind"] == "sample_loop"
+    assert Path(kick_audio["abs_path"]).stat().st_size > 100_000
     # ABLETON_DROP mirror
     drop = tmp_path / "exports" / "ABLETON_DROP"
     assert drop.is_dir()

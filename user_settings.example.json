@@ -19,5 +19,10 @@
     "guitar": false,
     "keys": false,
     "strings": false
-  }
+  },
+  "sampleRoots": [],
+  "serumRoots": [
+    "G:\\Other computers\\Snowy\\music\\serum presets"
+  ],
+  "theme": "dark"
 }

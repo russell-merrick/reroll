@@ -6,15 +6,17 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 python-multipart>=0.0.12
 
-# Audio metadata (duration, sample rate, channels) — no full DSP yet
+# Audio metadata (duration, sample rate, channels)
 mutagen>=1.47.0
 
 # MIDI write (V0.4+)
 mido>=1.3.2
 
+# Offline sample-loop stems for Ableton export
+numpy>=1.26.0
+
 # Optional later:
 # soundfile>=0.12.1
-# numpy>=2.0.0
 # scipy>=1.14.0
 
 # --- Serum VST host sidecar (separate env — Python 3.12 required) ---
