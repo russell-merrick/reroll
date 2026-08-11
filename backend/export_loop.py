@@ -92,6 +92,7 @@ def export_loop(
     render_serum: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     sync_ableton_drop: bool = True,
     sync_user_library: bool = True,
+    write_als: bool = True,
 ) -> dict[str, Any]:
     """
     Write a flat export folder (no audio/midi subdirs) for easy multi-select drag.
@@ -100,6 +101,9 @@ def export_loop(
       - exports/ABLETON_DROP/  (always the latest set)
       - ~/Documents/Ableton/User Library/Samples/Reroll/  (when possible)
         so clips appear in Live's browser without leaving Live.
+
+    When ``write_als`` is true, also builds an Ableton Live Set project folder
+    (``.als`` + ``Samples/Imported``) next to the flat stems.
     """
     from .midi_util import grid_to_notes, write_midi_file
 
@@ -340,6 +344,64 @@ def export_loop(
     audio_out = [f for f in files_out if f.get("role") == "audio"]
     midi_out = [f for f in files_out if f.get("role") == "midi"]
 
+    als_info: dict[str, Any] | None = None
+    if write_als and audio_out:
+        try:
+            from .export_als import write_als_project
+
+            als_audio = [
+                {
+                    "name": f.get("name"),
+                    "abs_path": f.get("abs_path"),
+                    "track": Path(str(f.get("name") or "track")).stem,
+                }
+                for f in audio_out
+                if f.get("abs_path")
+            ]
+            # Write .als into THIS export folder (next to the wavs) so it is obvious
+            als_info = write_als_project(
+                parent_dir=folder,
+                project_name=name or label,
+                bpm=bpm,
+                bars=bars,
+                audio_files=als_audio,
+                nest_project_folder=False,
+            )
+            if not als_info.get("ok"):
+                errors.append(
+                    f"ALS project: {als_info.get('error') or 'failed'}"
+                )
+            else:
+                als_path = als_info.get("als_path")
+                if als_path:
+                    files_out.append(
+                        {
+                            "track": "live_set",
+                            "type": "ableton",
+                            "kind": "als",
+                            "role": "als",
+                            "name": Path(str(als_path)).name,
+                            "file": Path(str(als_path)).name,
+                            "abs_path": str(als_path),
+                            "mime": "application/octet-stream",
+                        }
+                    )
+                print(
+                    f"[reroll] wrote Live Set → {als_info.get('als_path')}",
+                    flush=True,
+                )
+        except Exception as exc:
+            als_info = {"ok": False, "error": str(exc)}
+            errors.append(f"ALS project: {exc}")
+            print(f"[reroll] ALS export failed: {exc}", flush=True)
+    elif write_als and not audio_out:
+        als_info = {"ok": False, "error": "no audio stems to put in Live Set"}
+        errors.append("ALS project: no audio stems")
+
+    # Refresh lists after optional ALS file entry
+    audio_out = [f for f in files_out if f.get("role") == "audio"]
+    midi_out = [f for f in files_out if f.get("role") == "midi"]
+
     manifest = {
         "ok": True,
         "name": name or label,
@@ -350,15 +412,18 @@ def export_loop(
         "folder": str(folder.resolve()),
         "drop_folder": str(drop_dir.resolve()) if drop_paths else None,
         "user_library_folder": user_lib_dir,
+        "als": als_info,
+        "als_path": (als_info or {}).get("als_path"),
+        "als_project_dir": (als_info or {}).get("project_dir"),
+        "write_als": bool(write_als),
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "files": files_out,
         "audio": audio_out,
         "midi": midi_out,
         "errors": errors,
         "hint": (
-            "Select audio in Explorer, then drop BELOW existing tracks "
-            "(or empty Session area) so Live makes one track per file. "
-            "Track names follow sample/preset filenames."
+            "Double-click the .als in this folder to open in Live. "
+            "Or drag .wav stems onto empty Session space (one track per file)."
         ),
     }
     (folder / "manifest.json").write_text(
@@ -370,13 +435,18 @@ def export_loop(
                 f"Loop export · {manifest['name']}",
                 f"{int(bpm)} BPM · {key} · {style} · {bars} bars",
                 "",
-                "ONE TRACK PER FILE (Ableton):",
-                "  1. In Reroll: Export → Explorer opens with .wav selected",
-                "  2. Drag onto EMPTY space in Session/Arrangement",
-                "     (below/right of tracks — NOT onto one track)",
-                "  3. Live creates one track per file; names follow the sample filenames",
+                "ABLETON LIVE SET (.als):",
+                (
+                    f"  Open: {als_info.get('als_path')}"
+                    if als_info and als_info.get("ok")
+                    else "  (not written — enable write_als or check errors)"
+                ),
+                "  Project folder includes Samples/Imported stems.",
                 "",
-                "If everything lands on one track: undo, drop lower / on empty area.",
+                "OR drag stems (one track per file):",
+                "  1. Explorer opens with .wav selected",
+                "  2. Drop on EMPTY space in Session/Arrangement",
+                "     (below tracks — NOT onto one track)",
                 "",
                 "Also: Live browser → User Library → Samples → Reroll",
                 "",

@@ -1,4 +1,4 @@
-"""In-memory library catalog (no database)."""
+"""In-memory library catalog (loaded from library.db or a disk scan)."""
 
 from __future__ import annotations
 

@@ -12,9 +12,9 @@ const state = {
     filterRisers: true,
     /** Skip stock Serum banks; only Splice/User */
     filterFactorySerum: false,
-    /** Include Serum 1 (.fxp) in Generate / dice */
+    /** Include Serum 1 (.fxp) in Reroll / dice */
     serum1: true,
-    /** Include Serum 2 (.SerumPreset) in Generate / dice */
+    /** Include Serum 2 (.SerumPreset) in Reroll / dice */
     serum2: true,
     /** instrument id → enabled for default track stack */
     instruments: {},
@@ -163,7 +163,7 @@ let activePulseTimer = null;
 let isPlaying = false;
 /** True while samples/Serum are loading before the first note. */
 let isPlayPending = false;
-/** Nested count of async work (Serum bounce, sample load, generate…). */
+/** Nested count of async work (Serum bounce, sample load, reroll…). */
 let transportBusyCount = 0;
 /** Optional label while busy (e.g. "Rendering bass"). */
 let transportBusyLabel = "";
@@ -708,7 +708,7 @@ function updateStatusBar() {
   }
 }
 
-/** Mark async work (Serum .wav bounce, generate, etc.). Nested-safe. */
+/** Mark async work (Serum .wav bounce, reroll, etc.). Nested-safe. */
 function beginTransportBusy(label = "") {
   transportBusyCount += 1;
   if (label) transportBusyLabel = label;
@@ -796,8 +796,8 @@ function tipForButton(btn) {
   }
   if (btn.classList.contains("lock")) {
     return btn.classList.contains("on")
-      ? "Unlock — allow Generate to change this track"
-      : "Lock — keep this sound on Generate";
+      ? "Unlock — allow Reroll to change this track"
+      : "Lock — keep this sound on Reroll";
   }
   if (btn.classList.contains("dice")) return "Reroll this track only";
   if (btn.classList.contains("loop-delete")) return "Delete this saved loop";
@@ -2935,7 +2935,7 @@ async function loadUserSettings() {
 /**
  * Fill unlocked tracks from the library.
  * @param {{ autoPlay?: boolean }} [opts]
- *  - autoPlay (default true): after generate, start or restart the loop
+ *  - autoPlay (default true): after Reroll, start or restart the loop
  *    (keep going if already playing; start if stopped). Init/options use false.
  */
 async function doGenerate(opts = {}) {
@@ -2954,8 +2954,8 @@ async function doGenerate(opts = {}) {
     filter_risers: getFilterRisers(),
     filter_factory_serum: getFilterFactorySerum(),
   };
-  setStatus("Generating…");
-  beginTransportBusy("Generating…");
+  setStatus("Rerolling…");
+  beginTransportBusy("Rerolling…");
   let loop;
   try {
     loop = await api("/api/generate", {
@@ -2965,7 +2965,7 @@ async function doGenerate(opts = {}) {
   } finally {
     endTransportBusy();
   }
-  pushUndo("Generate");
+  pushUndo("Reroll");
   for (const [role, slot] of Object.entries(loop.slots || {})) {
     if (!state.slots[role]) continue;
     const locked = Boolean(state.slots[role]?.locked);
@@ -2984,7 +2984,7 @@ async function doGenerate(opts = {}) {
       applySlot(role, { ...state.slots[role], locked });
     }
   }
-  const summary = `Generated · ${loop.bpm} BPM · ${loop.key} · ${loop.style} · ${serumEngineLabel(eng)}`;
+  const summary = `Rerolled · ${loop.bpm} BPM · ${loop.key} · ${loop.style} · ${serumEngineLabel(eng)}`;
   if (!autoPlay) {
     setStatus(`${summary} — press Play`);
     return;
@@ -3332,7 +3332,7 @@ async function loadMacrosForEditor(role) {
     ed.draft.macros = null;
     wrap?.classList.remove("is-loading");
     wrap?.classList.add("is-empty");
-    if (status) status.textContent = "No Serum preset on this slot — Generate/dice first";
+    if (status) status.textContent = "No Serum preset on this slot — Reroll/dice first";
     renderMacroSliders(role);
     return;
   }
@@ -3836,8 +3836,8 @@ function syncLockUi(role) {
   lockBtn.textContent = locked ? "🔒" : "🔓";
   lockBtn.setAttribute("aria-label", locked ? "Unlock" : "Lock");
   lockBtn.dataset.tip = locked
-    ? "Unlock — allow Generate to change this track"
-    : "Lock — keep this sound on Generate";
+    ? "Unlock — allow Reroll to change this track"
+    : "Lock — keep this sound on Reroll";
 }
 
 function toggleLock(role, _btn) {
@@ -3882,7 +3882,7 @@ function buildSlotElement(id, type) {
     snare: "SNARE",
   };
   const roleHtml = serum
-    ? `<label class="slot-role-wrap" data-tip="Serum type filter for Generate / dice">
+    ? `<label class="slot-role-wrap" data-tip="Serum type filter for Reroll / dice">
         <select class="slot-role-select" data-role="${id}" aria-label="Serum type">
           ${serumTypeOptionsHtml(type)}
         </select>
@@ -3899,13 +3899,13 @@ function buildSlotElement(id, type) {
     ${roleHtml}
     <div class="slot-body">
       <div class="slot-name">${serum ? `Serum · ${type}` : "— empty —"}</div>
-      <div class="slot-meta">${serum ? "preset · MIDI will follow key" : "optional · pick with Generate"}</div>
+      <div class="slot-meta">${serum ? "preset · MIDI will follow key" : "optional · pick with Reroll"}</div>
     </div>
     ${toolsHtml}
     <div class="slot-actions">
       <button type="button" class="icon-btn mute" data-tip="Mute / unmute" aria-pressed="false" aria-label="Mute">🔊</button>
       <button type="button" class="icon-btn solo" data-tip="Solo this track" aria-pressed="false" aria-label="Solo">S</button>
-      <button type="button" class="icon-btn lock" data-tip="Lock — keep on Generate" aria-pressed="false" aria-label="Lock">🔓</button>
+      <button type="button" class="icon-btn lock" data-tip="Lock — keep on Reroll" aria-pressed="false" aria-label="Lock">🔓</button>
       <button type="button" class="icon-btn delete" data-tip="Remove track from stack" aria-label="Delete track">🗑️</button>
       <button type="button" class="icon-btn dice" data-tip="Reroll this track" aria-label="Reroll">🎲</button>
     </div>
@@ -3982,7 +3982,7 @@ function addTrack(type, { silent = false } = {}) {
         : "— empty —",
     meta: isSerumType(t)
       ? "preset · MIDI will follow key"
-      : "pick with Generate / dice",
+      : "pick with Reroll / dice",
     path: null,
     locked: false,
     muted: false,
@@ -4064,7 +4064,7 @@ function renderInstrumentCheckboxes() {
       if (!isPlaying && !isPlayPending) {
         initDefaultTracks();
         doGenerate({ autoPlay: false }).catch((e) =>
-          setStatus(`Generate failed: ${e.message}`)
+          setStatus(`Reroll failed: ${e.message}`)
         );
       }
     });
@@ -4611,7 +4611,7 @@ function initUiChrome() {
   // Tracks built after settings load in init() so saved instrument prefs apply
 
   $("#btn-generate")?.addEventListener("click", () => {
-    doGenerate().catch((e) => setStatus(`Generate failed: ${e.message}`));
+    doGenerate().catch((e) => setStatus(`Reroll failed: ${e.message}`));
   });
 
   $("#btn-options")?.addEventListener("click", () => {
@@ -4642,7 +4642,7 @@ function initUiChrome() {
   const onSerumOpt = () => {
     readSerumEngineOptionsFromDom();
     const eng = getSerumEngine();
-    setStatus(`Options · ${serumEngineLabel(eng)} for Generate / dice`);
+    setStatus(`Options · ${serumEngineLabel(eng)} for Reroll / dice`);
     scheduleSaveUserSettings({ immediate: true });
   };
   $("#opt-serum1")?.addEventListener("change", onSerumOpt);
@@ -4712,12 +4712,6 @@ function initUiChrome() {
     }
   });
 
-  $("#btn-shuffle")?.addEventListener("click", () => {
-    doGenerate()
-      .then(() => setStatus("Shuffled unlocked tracks"))
-      .catch((e) => setStatus(`Shuffle failed: ${e.message}`));
-  });
-
   $("#btn-save")?.addEventListener("click", () => openSaveDialog());
   $("#btn-my-loops")?.addEventListener("click", () => {
     openMyLoopsDialog().catch((e) => setStatus(`My Loops failed: ${e.message}`));
@@ -4778,6 +4772,38 @@ function initUiChrome() {
       setStatus(`Select in Explorer failed: ${e.message || e}`)
     );
   });
+  $("#btn-open-als")?.addEventListener("click", () => {
+    const btn = $("#btn-open-als");
+    // Prefer the .als file path so Explorer highlights the Live Set
+    const alsPath =
+      btn?.dataset?.als ||
+      lastExport?.alsPath ||
+      null;
+    const folder =
+      btn?.dataset?.folder ||
+      lastExport?.alsProjectDir ||
+      null;
+    const target = alsPath || folder;
+    if (!target) {
+      setStatus(
+        "No .als project yet — enable Write .als Live Set and Export again"
+      );
+      return;
+    }
+    api("/api/export/open", {
+      method: "POST",
+      body: JSON.stringify({ path: target }),
+    })
+      .then((r) => {
+        const shown = r.path || target;
+        setStatus(
+          r.selected
+            ? `Explorer: selected Live Set · ${shown}`
+            : `Opened · ${shown}`
+        );
+      })
+      .catch((e) => setStatus(`Open .als failed: ${e.message || e}`));
+  });
   bindExportDragAll();
 }
 
@@ -4823,6 +4849,7 @@ async function doExportLoop() {
 
   setStatus("Exporting… (Serum bounces may take a few seconds)");
   beginTransportBusy("Exporting…");
+  const writeAls = !!$("#opt-write-als")?.checked;
   try {
     let result;
     try {
@@ -4836,6 +4863,7 @@ async function doExportLoop() {
           bars: typeof LOOP_BARS === "number" ? LOOP_BARS : 4,
           tracks,
           open_folder: false,
+          write_als: writeAls,
         }),
       });
     } catch (e) {
@@ -4859,18 +4887,38 @@ async function doExportLoop() {
       folder: result.folder || null,
       dropFolder: result.drop_folder || null,
       userLibrary: result.user_library_folder || null,
+      alsPath: result.als_path || result.als?.als_path || null,
+      alsProjectDir: result.als_project_dir || result.als?.project_dir || null,
     };
     renderExportDropTray(result, files);
     const n = files.length;
     const errs = Array.isArray(result.errors) ? result.errors.length : 0;
     let msg = `Exported ${n} clip${n === 1 ? "" : "s"}`;
+    if (lastExport.alsPath) {
+      msg += " · .als Live Set ready";
+    } else if (writeAls) {
+      const alsErr = result.als?.error || "not written — restart uvicorn & re-export";
+      msg += ` · .als failed (${alsErr})`;
+    }
     if (result.user_library_folder) msg += " · also in Live User Library → Samples → Reroll";
     if (errs) msg += ` · ${errs} warning${errs === 1 ? "" : "s"}`;
     setStatus(msg);
-    // Browsers cannot hand real filesystem files to Ableton (🚫). Open Explorer
-    // with clips selected so you drag OS files into Live.
-    if (n > 0) {
-      // Audio only — multi-drop creates one Live track per file named Kick/Bass/…
+    // Prefer highlighting the .als in Explorer so it's impossible to miss.
+    // Fallback: multi-select audio stems for drag into Live.
+    if (lastExport.alsPath) {
+      api("/api/export/open", {
+        method: "POST",
+        body: JSON.stringify({ path: lastExport.alsPath }),
+      })
+        .then(() => {
+          setStatus(
+            `${msg} · Explorer has the .als selected — double-click it to open in Live`
+          );
+        })
+        .catch((e) => {
+          setStatus(`${msg} · open .als failed (${e.message || e})`);
+        });
+    } else if (n > 0) {
       selectExportInExplorer({ audioOnly: true })
         .then(() => {
           setStatus(
@@ -4959,10 +5007,34 @@ function renderExportDropTray(result, files) {
   const panel = $("#export-drop");
   const chips = $("#export-chips");
   const meta = $("#export-drop-meta");
+  const alsEl = $("#export-als-path");
+  const btnAls = $("#btn-open-als");
   if (!panel || !chips) {
     console.warn("export-drop panel missing from DOM — hard-refresh the page");
     setStatus("Export UI missing — hard-refresh the browser (Ctrl+F5)");
     return;
+  }
+  const alsPath = result.als_path || result.als?.als_path || null;
+  const alsDir = result.als_project_dir || result.als?.project_dir || null;
+  const alsOk = !!(alsPath || alsDir) && result.als?.ok !== false;
+  if (alsEl) {
+    if (alsOk && alsPath) {
+      alsEl.hidden = false;
+      alsEl.textContent = `Live Set: ${alsPath}`;
+      alsEl.title = alsPath;
+    } else if (result.als && result.als.ok === false) {
+      alsEl.hidden = false;
+      alsEl.textContent = `ALS failed: ${result.als.error || "unknown error"}`;
+      alsEl.title = result.als.error || "";
+    } else {
+      alsEl.hidden = true;
+      alsEl.textContent = "";
+    }
+  }
+  if (btnAls) {
+    btnAls.hidden = !alsOk;
+    btnAls.dataset.folder = alsDir || "";
+    btnAls.dataset.als = alsPath || "";
   }
   panel.hidden = false;
   panel.removeAttribute("hidden");
@@ -4983,7 +5055,9 @@ function renderExportDropTray(result, files) {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className =
-      "export-chip" + (f.role === "midi" || f.kind === "midi" ? " is-midi" : "");
+      "export-chip" +
+      (f.role === "midi" || f.kind === "midi" ? " is-midi" : "") +
+      (f.role === "als" || f.kind === "als" ? " is-als" : "");
     // Not draggable — browser→Live always 🚫; click opens Explorer with this file
     chip.draggable = false;
     chip.textContent = f.name || f.file || `clip ${i + 1}`;

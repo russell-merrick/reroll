@@ -54,7 +54,7 @@ Enough to bootstrap a **random role picker** without a DB — if we also use **f
 | L4 | For each file, capture: absolute path, name, extension, size, parent folders. |
 | L5 | Assign a **best-effort role** from path + filename (kick, snare/clap, hat, perc, bass, lead, pad, fx, vocal, loop, unknown). |
 | L6 | UI shows scan summary: counts per role, list/browse samples. |
-| L7 | Rescan replaces in-memory catalog (no persistence yet). |
+| L7 | Rescan replaces in-memory catalog and refreshes `library.db`; startup loads the DB when present (no full disk walk). |
 
 **Success:** App knows what *your* samples and Serum presets are on this HDD.
 
@@ -88,7 +88,7 @@ Enough to bootstrap a **random role picker** without a DB — if we also use **f
 - SQLite / any durable index (re-add when catalog is large or slow)
 - Semantic search / embeddings
 - Parsing Serum preset DSP parameters
-- Writing `.als` projects
+- ~~Writing `.als` projects~~ (shipped as optional export; audio session clips)
 - Using Live Suite factory content as default pool
 
 ---

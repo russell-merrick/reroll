@@ -136,11 +136,11 @@ Remote / File Stream paths work if Windows can open the files (online-only place
 
 1. Set **BPM**, **key**, **style** (session controls).
 2. **Reroll** — fills unlocked tracks from your library.
-3. **Lock** keepers; **dice** (🔀 per track) or **Shuffle** the rest.
+3. **Lock** keepers; **dice** (🔀 per track) or **Reroll** the rest.
 4. **Play** (or **Space**) — loops forever; button toggles stop.
 5. Serum tracks: **M** opens MIDI editor (stackable); length toolbar + drag to resize notes; macros when the host can load the preset.
 6. Sample **loops** (hats, beds, etc.) warp to session BPM when the filename has a tempo tag (e.g. `_140_`) and re-lock to the kick cycle.
-7. **Export for Ableton** — flat clips + in-app **drag tray** (drop onto an open Live set). Also mirrors to `exports/ABLETON_DROP/` and Live **User Library → Samples → Reroll**.
+7. **Export for Ableton** — flat stems + optional **`.als` Live Set** (checkbox) + in-app drag tray. Also mirrors to `exports/ABLETON_DROP/` and Live **User Library → Samples → Reroll**.
 
 ### Transport status bar
 
@@ -148,7 +148,7 @@ Remote / File Stream paths work if Windows can open the files (online-only place
 |-------|---------|
 | Grey | Idle |
 | Green (breathing) | Playing |
-| Yellow | Working (load samples, Serum bounce, generate, dice) |
+| Yellow | Working (load samples, Serum bounce, reroll, dice) |
 
 ### Keyboard
 
@@ -168,7 +168,7 @@ reroll/   (or loop_gen_project/)
   requirements.txt          # main app
   requirements-dev.txt      # + pytest
   user_settings.example.json
-  backend/                  # FastAPI (scan, generate, settings, Serum proxy)
+  backend/                  # FastAPI (scan, reroll, settings, Serum proxy)
   frontend/                 # UI + Web Audio + MIDI editor
   host/                     # Python 3.12 DawDreamer CLI + worker + cache/
   exports/                  # Ableton handoff (gitignored contents)
@@ -183,7 +183,7 @@ reroll/   (or loop_gen_project/)
 ```text
 Browser (frontend/)
       ↕  HTTP
-FastAPI (backend/) — catalog, generate, options, export open
+FastAPI (backend/) — catalog, reroll, options, export open
       │
 In-memory catalog (scan of local disks)
       ↕  subprocess
@@ -218,16 +218,16 @@ python -m uvicorn backend.app:app --host 127.0.0.1 --port 8001 --reload
 | `GET` | `/api/health` | Liveness |
 | `GET` | `/api/library` | Catalog summary |
 | `POST` | `/api/scan` | Rescan library roots |
-| `POST` | `/api/generate` | Fill tracks |
+| `POST` | `/api/generate` | Reroll / fill tracks |
 | `POST` | `/api/reroll` | Dice one track |
 | `POST` | `/api/serum/render` | Offline Serum bounce |
 | `POST` | `/api/serum/macros` | Macro names/values |
 | `POST` | `/api/serum/open` | Launch plugin UI |
 | `GET`/`POST` | `/api/settings` | User prefs |
-| `POST` | `/api/export` | Export session → stems + MIDI folder |
-| `POST` | `/api/export/open` | Open `exports/` in Explorer |
+| `POST` | `/api/export` | Export session → stems + MIDI (+ optional `.als`) |
+| `POST` | `/api/export/open` | Open `exports/` (or a subfolder) in Explorer |
 
-### Export → Ableton (open set)
+### Export → Ableton
 
 ```text
 exports/
@@ -236,13 +236,16 @@ exports/
     02_bass_….wav
     03_bass_…_midi.mid
     manifest.json
-  ABLETON_DROP/          # always the latest export (flat)
+    My Loop Project/           # when “Write .als Live Set” is on
+      My Loop.als
+      Ableton Project Info/
+      Samples/Imported/…
+  ABLETON_DROP/                # always the latest export (flat)
 ```
 
-Also copied to `Documents/Ableton/User Library/Samples/Reroll/` when that tree exists — drag from **Live’s own browser** without leaving Live.
+**Preferred:** open the `.als` in Live (double-click or **Open .als project**). Stems live under `Samples/Imported/` with session BPM set.
 
-In the app: **Export for Ableton** → drag chips (or **Drag all**) onto Session/Arrangement.  
-Fallback: **Select in Explorer** (files pre-selected) → drag into Live.
+**Also:** drag flat stems onto empty Session/Arrangement space (one track per file), or use Live browser → **User Library → Samples → Reroll**.
 
 ### Library DB
 
@@ -257,13 +260,14 @@ Fallback: **Select in Explorer** (files pre-selected) → drag into Live.
 | Area | Notes |
 |------|--------|
 | Dynamic tracks | Add / delete; stack any number |
-| Generate / dice / shuffle | Unlocked tracks only; Generate auto-plays |
+| Reroll / dice | Unlocked tracks only; Reroll auto-plays |
 | Serum 1 / 2 filter | Options + per-track type (BASS, LEAD, …) |
 | MIDI | Monophonic 16-step grids; note length + edge drag |
 | Macros | S1 mapped renames; S2 names from `.SerumPreset` file |
 | Sample loops | BPM warp + kick-cycle re-lock |
 | Serum stems | Offline bounce; re-trigger each loop cycle |
-| **Export** | Audio + MIDI package for Ableton |
+| **Export** | Audio + MIDI stems for Ableton |
+| **`.als` Live Set** | Optional project folder (session clips + Samples/Imported) |
 | **Library DB** | SQLite cache for fast restart |
 | JS synth fallback | If host missing or bounce fails |
 | Mute / solo / lock | Live while playing |
@@ -271,11 +275,33 @@ Fallback: **Select in Explorer** (files pre-selected) → drag into Live.
 
 ---
 
-## Not done / non-goals
+## Planned / gaps
 
-**Next (rough):** style/pack-aware generate, Ableton `.als` project gen, “more like this”, richer library browser UI.
+### Next (higher impact)
 
-**Non-goals for now:** full song arrangement, cloud libraries, shipping Serum.
+| Feature | Notes |
+|---------|--------|
+| **Style / pack-aware Reroll** | Style is mostly a label today — bias picks by style/pack tokens |
+| **“More like this”** | Seed similar sounds from a locked track |
+| **Richer library browser** | Search / filter / preview beyond role counts |
+
+### Nice to have
+
+| Feature | Notes |
+|---------|--------|
+| **User role overrides** | Tag roles in DB instead of filename heuristics only |
+| **Incremental rescan** | mtime / hash delta instead of full re-walk |
+| **Energy control** | First-class session energy (early requirements) |
+| **Key-aware sample pick** | Filter/pool by detected or tagged key |
+| **Richer MIDI** | Polyphony, more than 16-step monophonic grids |
+| **Serum param editing** | Beyond macros + offline bounce |
+| **Named saves polish** | Session browser UX for `saves/` |
+| **Stale path recovery** | Clear errors when DB paths move off disk |
+| **MIDI tracks in `.als`** | Audio stems in the Live Set today; MIDI still as `.mid` files |
+
+### Non-goals for now
+
+Full song arrangement · cloud libraries · shipping Serum · replacing Ableton · chat-style AI production
 
 ---
 

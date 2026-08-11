@@ -105,6 +105,9 @@ html[data-theme="rainbow"] {
   --overlay: rgba(20, 0, 40, 0.7);
   --glow-a: rgba(255, 0, 128, 0.2);
   --glow-b: rgba(0, 255, 200, 0.18);
+  /* Magenta mid-stops so purple↔red doesn't hard-cut through muddy RGB */
+  --rainbow-stops: #ff006e, #ff4d6d, #ff8c42, #ffbe0b, #9ef01a, #39ff14,
+    #2dd4bf, #00f0ff, #4cc9f0, #7b61ff, #c77dff, #e056fd, #ff2d95, #ff006e;
   color-scheme: dark;
 }
 
@@ -177,7 +180,9 @@ html[data-theme="rainbow"] body {
 }
 
 html[data-theme="rainbow"] .brand-mark {
-  background: linear-gradient(90deg, #ff006e, #ffbe0b, #39ff14, #00f0ff, #c77dff, #ff006e);
+  /* Extra fuchsia stops + oklch blend so purple→red isn't a hard band */
+  background: linear-gradient(90deg, var(--rainbow-stops));
+  background: linear-gradient(90deg in oklch, var(--rainbow-stops));
   background-size: 200% auto;
   -webkit-background-clip: text;
   background-clip: text;
@@ -186,7 +191,8 @@ html[data-theme="rainbow"] .brand-mark {
 }
 
 html[data-theme="rainbow"] .btn.primary {
-  background: linear-gradient(90deg, #ff006e, #ffbe0b, #39ff14, #00f0ff, #c77dff);
+  background: linear-gradient(90deg, var(--rainbow-stops));
+  background: linear-gradient(90deg in oklch, var(--rainbow-stops));
   background-size: 200% auto;
   border-color: transparent;
   color: #14081f;
@@ -195,18 +201,60 @@ html[data-theme="rainbow"] .btn.primary {
 }
 
 html[data-theme="rainbow"] .slot {
-  border-image: linear-gradient(90deg, #ff006e, #ffbe0b, #39ff14, #00f0ff, #c77dff) 1;
+  border-image: linear-gradient(90deg, var(--rainbow-stops)) 1;
+  border-image: linear-gradient(90deg in oklch, var(--rainbow-stops)) 1;
   border-width: 1px;
   border-style: solid;
 }
 
 html[data-theme="rainbow"] .slot.serum {
   border-left-width: 3px;
-  border-image: linear-gradient(180deg, #00f0ff, #ff006e, #39ff14) 1;
+  border-image: linear-gradient(
+      180deg,
+      #00f0ff,
+      #4cc9f0,
+      #7b61ff,
+      #c77dff,
+      #e056fd,
+      #ff006e,
+      #ff8c42,
+      #39ff14
+    )
+    1;
+  border-image: linear-gradient(
+      180deg in oklch,
+      #00f0ff,
+      #4cc9f0,
+      #7b61ff,
+      #c77dff,
+      #e056fd,
+      #ff006e,
+      #ff8c42,
+      #39ff14
+    )
+    1;
 }
 
 @keyframes rainbow-text {
   to { background-position: 200% center; }
+}
+
+/* Library block inside Options */
+.options-lib-stats {
+  margin: 0 0 8px;
+}
+
+.options-lib-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.options-panel .role-counts {
+  max-height: 8rem;
+  overflow: auto;
+  margin: 0 0 4px;
 }
 
 /* Theme picker in Options */
@@ -1143,6 +1191,34 @@ html[data-theme="rainbow"] .slot.serum {
   text-transform: none;
   letter-spacing: 0;
   color: var(--text-faint);
+}
+
+.export-als-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+.export-als-opt input {
+  accent-color: var(--accent);
+}
+
+.export-als-path {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-slot);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  word-break: break-all;
 }
 
 .export-drag-all {

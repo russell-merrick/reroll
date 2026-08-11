@@ -152,6 +152,8 @@ class ExportRequest(BaseModel):
     tracks: list[ExportTrack] = Field(default_factory=list)
     # Default false — UI shows drag tray into the open Live set instead
     open_folder: bool = False
+    # Write Ableton Live Set project (.als + Samples/Imported)
+    write_als: bool = True
 
 
 class ExportSelectRequest(BaseModel):
@@ -324,12 +326,22 @@ def startup_scan() -> None:
         CATALOG.serum_roots = loaded.serum_roots
         CATALOG.scanned = True
         CATALOG.last_error = None
+        print(
+            f"[reroll] library.db → {len(CATALOG.samples)} samples, "
+            f"{len(CATALOG.serum)} serum ({LIBRARY_DB.name})",
+            flush=True,
+        )
     else:
+        print("[reroll] no library.db — full disk scan…", flush=True)
         _run_library_scan()
         try:
-            save_catalog(CATALOG, LIBRARY_DB)
-        except OSError:
-            pass
+            info = save_catalog(CATALOG, LIBRARY_DB)
+            print(
+                f"[reroll] scan saved → {info.get('assets', 0)} assets → {LIBRARY_DB.name}",
+                flush=True,
+            )
+        except OSError as exc:
+            print(f"[reroll] could not save library.db: {exc}", flush=True)
 
     def _warm_serum_worker() -> None:
         try:
@@ -988,18 +1000,92 @@ def _open_folder(path: str) -> None:
         subprocess.Popen(["xdg-open", path])
 
 
+class ExportOpenRequest(BaseModel):
+    """Optional path under exports/ (dir, .als file, or omit for exports root)."""
+
+    path: str | None = None
+
+
+def _under_exports(p: Path) -> Path:
+    """Resolve path and require it lives under EXPORT_DIR."""
+    root = EXPORT_DIR.resolve()
+    resolved = p.expanduser().resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=403, detail="path must be under exports/"
+        ) from exc
+    return resolved
+
+
 @app.post("/api/export/open")
-def export_open_folder() -> dict[str, Any]:
-    """Open the export folder in the OS file manager (Explorer on Windows)."""
+def export_open_folder(body: ExportOpenRequest) -> dict[str, Any]:
+    """Open exports root, a project folder, or select a file (.als) in Explorer."""
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     (EXPORT_DIR / "audio").mkdir(parents=True, exist_ok=True)
     (EXPORT_DIR / "midi").mkdir(parents=True, exist_ok=True)
-    path = str(EXPORT_DIR.resolve())
-    try:
-        _open_folder(path)
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Could not open folder: {exc}") from exc
-    return {"ok": True, "path": path}
+
+    req_path = (body.path or "").strip() if body and body.path else ""
+    if not req_path:
+        path = str(EXPORT_DIR.resolve())
+        try:
+            _open_folder(path)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Could not open folder: {exc}"
+            ) from exc
+        return {"ok": True, "path": path}
+
+    p = _under_exports(Path(req_path))
+
+    # File (e.g. .als): open Explorer with that file selected so it's obvious
+    if p.is_file():
+        if sys.platform == "win32":
+            ok = _win_select_files([p])
+            if not ok:
+                try:
+                    subprocess.Popen(
+                        ["explorer", f"/select,{p}"],
+                        shell=False,
+                    )
+                except OSError as exc:
+                    raise HTTPException(
+                        status_code=500, detail=f"Could not select file: {exc}"
+                    ) from exc
+            return {
+                "ok": True,
+                "path": str(p),
+                "folder": str(p.parent),
+                "selected": True,
+            }
+        try:
+            _open_folder(str(p.parent))
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"ok": True, "path": str(p), "folder": str(p.parent)}
+
+    if p.is_dir():
+        # Prefer highlighting the .als inside a Live project folder
+        als_files = sorted(p.glob("*.als"))
+        if als_files and sys.platform == "win32":
+            ok = _win_select_files([als_files[0]])
+            if ok:
+                return {
+                    "ok": True,
+                    "path": str(als_files[0]),
+                    "folder": str(p),
+                    "selected": True,
+                }
+        try:
+            _open_folder(str(p))
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Could not open folder: {exc}"
+            ) from exc
+        return {"ok": True, "path": str(p)}
+
+    raise HTTPException(status_code=404, detail=f"not found: {p}")
 
 
 def _allowed_export_file(path: str | Path) -> Path:
@@ -1074,7 +1160,8 @@ def export_select_in_explorer(body: ExportSelectRequest) -> dict[str, Any]:
                 p
                 for p in folder.iterdir()
                 if p.is_file() and p.suffix.lower() in {
-                    ".wav", ".aif", ".aiff", ".flac", ".mp3", ".mid", ".midi"
+                    ".wav", ".aif", ".aiff", ".flac", ".mp3", ".mid", ".midi",
+                    ".als",
                 }
             )
     if not paths:
@@ -1264,6 +1351,7 @@ def export_current_loop(body: ExportRequest) -> dict[str, Any]:
             tracks=tracks,
             name=body.name,
             render_serum=render_serum,
+            write_als=bool(body.write_als),
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc

@@ -27,10 +27,7 @@
           <p class="tagline">By Austin Russell · Your collection, infinite ideas</p>
         </div>
       </div>
-      <div class="topbar-actions">
-        <button type="button" class="btn ghost" id="btn-my-loops" data-tip="Browse and load saved loops">My Loops</button>
-        <button type="button" class="btn ghost" id="btn-library" data-tip="Library roots &amp; scan paths">Library</button>
-      </div>
+      <div class="topbar-actions"></div>
     </header>
 
     <!-- Session controls -->
@@ -105,7 +102,7 @@
           <div class="options-instruments" id="opt-instruments" role="group" aria-label="Default instruments"></div>
         </div>
         <div class="options-group">
-          <div class="options-group-title" data-tip="Which engines Generate / dice can pull presets from (global for all Serum tracks)">Serum library</div>
+          <div class="options-group-title" data-tip="Which engines Reroll / dice can pull presets from (global for all Serum tracks)">Serum library</div>
           <label class="options-row" data-tip="Include Serum 1 (.fxp) presets when generating or dicing synth tracks">
             <input type="checkbox" id="opt-serum1" checked />
             <span class="options-label"><strong>Serum 1</strong></span>
@@ -123,6 +120,20 @@
           <input type="checkbox" id="opt-filter-risers" checked />
           <span class="options-label"><strong>Filter out risers/builds</strong></span>
         </label>
+        <div class="options-group">
+          <div class="options-group-title" data-tip="Sample &amp; Serum folders on disk">Library</div>
+          <div class="options-lib-stats lib-stats" aria-label="Library counts">
+            <div><strong id="stat-samples">—</strong><span>samples</span></div>
+            <div><strong id="stat-serum">—</strong><span>Serum</span></div>
+            <div><strong id="stat-packs">—</strong><span>packs</span></div>
+          </div>
+          <ul class="role-counts" id="role-counts"></ul>
+          <div class="lib-roots" id="lib-roots" hidden aria-hidden="true"></div>
+          <div class="options-lib-actions">
+            <button type="button" class="btn ghost wide" id="btn-library" data-tip="Edit sample &amp; Serum roots, then rescan">📁 Library roots…</button>
+            <button type="button" class="btn ghost wide" id="btn-rescan" data-tip="Re-walk sample &amp; Serum folders and refresh library.db">Rescan</button>
+          </div>
+        </div>
       </section>
 
       <!-- Slots -->
@@ -174,11 +185,11 @@
           <h2>Preview</h2>
           <div class="transport-row">
             <button type="button" class="btn primary" id="btn-play" aria-pressed="false" data-tip="Play / stop loop (Space) · BPM live"><span class="emoji-play" aria-hidden="true">▶</span> Play</button>
-            <button type="button" class="btn ghost" id="btn-shuffle" data-tip="Shuffle all unlocked tracks (locked stay put)">🔀 Shuffle</button>
+            <button type="button" class="btn ghost" id="btn-options" data-tip="Show or hide options" aria-expanded="false">⚙️ Options</button>
           </div>
           <div class="transport-row transport-row-secondary">
-            <button type="button" class="btn ghost" id="btn-options" data-tip="Show or hide options" aria-expanded="false">⚙️ Options</button>
-            <button type="button" class="btn ghost" id="btn-save" data-tip="Save this loop with a name (load later from My Loops)">💾 Save</button>
+            <button type="button" class="btn ghost" id="btn-save" data-tip="Save this loop with a name (load later from My Loops)">💾 Save loop</button>
+            <button type="button" class="btn ghost" id="btn-my-loops" data-tip="Browse and load saved loops">🎧 My Loops</button>
           </div>
           <div
             class="status-bar is-idle"
@@ -201,11 +212,15 @@
         <section class="panel export-panel">
           <h2>Ableton</h2>
           <p class="hint" style="margin-bottom:10px">
-            Export selects <strong>audio stems</strong> in Explorer (sample/preset names).
-            Drop on <strong>empty space below tracks</strong> so Live makes one track per file.
-            Dropping onto one track stacks them all there.
+            Export bounces <strong>audio stems</strong> and optionally a real
+            <strong>.als Live Set</strong> (double-click in Live).
+            Or drag stems onto <strong>empty space below tracks</strong> for one track per file.
           </p>
-          <button type="button" class="btn primary wide" id="btn-export-panel" data-tip="Bounce stems + open Explorer (audio) for multi-track drop into Live">Export for Ableton</button>
+          <label class="export-als-opt" data-tip="Write a Live project folder with .als + Samples/Imported">
+            <input type="checkbox" id="opt-write-als" checked />
+            Write .als Live Set
+          </label>
+          <button type="button" class="btn primary wide" id="btn-export-panel" data-tip="Bounce stems (+ optional .als) and open Explorer for Live">Export for Ableton</button>
           <div class="export-drop" id="export-drop" hidden>
             <div class="export-drop-head">
               <strong>Ready for Live</strong>
@@ -214,36 +229,16 @@
             <div class="export-drag-all" id="export-drag-all" title="Select audio stems in Explorer — drop BELOW tracks in Live for one track each">
               📁 Select audio → drop below tracks in Live
             </div>
+            <div class="export-als-path" id="export-als-path" hidden></div>
             <div class="export-chips" id="export-chips"></div>
             <div class="export-drop-actions">
               <button type="button" class="btn ghost" id="btn-export-select" data-tip="Open Explorer with all files selected — then drag into Live">Select in Explorer</button>
               <button type="button" class="btn ghost" id="btn-open-export" data-tip="Open exports/ root folder">Open folder</button>
+              <button type="button" class="btn ghost" id="btn-open-als" hidden data-tip="Open the .als project folder in Explorer">Open .als project</button>
             </div>
           </div>
         </section>
 
-        <section class="panel library-panel" id="library-panel">
-          <h2>Library</h2>
-          <div class="lib-stats">
-            <div><strong id="stat-samples">508</strong><span>samples</span></div>
-            <div><strong id="stat-serum">472</strong><span>Serum</span></div>
-            <div><strong id="stat-packs">313</strong><span>packs</span></div>
-          </div>
-          <ul class="role-counts" id="role-counts">
-            <li><span>kick</span><b>61</b></li>
-            <li><span>snare</span><b>42</b></li>
-            <li><span>clap</span><b>27</b></li>
-            <li><span>hat</span><b>68</b></li>
-            <li><span>bass</span><b>29</b></li>
-            <li><span>fx</span><b>78</b></li>
-            <li><span>vocal</span><b>75</b></li>
-            <li><span>loop</span><b>119</b></li>
-            <li><span>synth</span><b>73</b></li>
-            <li><span>unknown</span><b>—</b></li>
-          </ul>
-          <div class="lib-roots" id="lib-roots" aria-label="Scanned roots"></div>
-          <button type="button" class="btn ghost wide" id="btn-rescan" data-tip="Rescan sample &amp; Serum folders into memory">Rescan</button>
-        </section>
       </aside>
     </main>
 
@@ -322,6 +317,6 @@
   </dialog>
 
   <script src="midi.js?v=loop-4bars"></script>
-  <script src="app.js?v=export-sample-names-5"></script>
+  <script src="app.js?v=layout-transport-1"></script>
 </body>
 </html>
