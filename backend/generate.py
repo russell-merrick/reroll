@@ -171,6 +171,280 @@ def _filter_serum_engine(pool: list[Asset], serum_engine: str) -> list[Asset]:
     return pool
 
 
+# Empty / explicit “no lean” → true random (no pack/path weighting).
+_NO_STYLE_MARKERS = frozenset(
+    {
+        "",
+        "none",
+        "no preference",
+        "nopreference",
+        "any",
+        "all",
+        "random",
+        "n/a",
+        "na",
+        "-",
+        "—",
+        "*",
+    }
+)
+
+# Extra search terms for common genre labels (soft match only).
+_STYLE_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "techno": ("techno", "tekno", "industrial"),
+    "melodic": ("melodic",),
+    "hard": ("hard", "hardgroove", "raw"),
+    "house": ("house", "deep house", "bass house"),
+    "tech": ("tech", "techhouse", "tech house"),
+    "trance": ("trance", "uplifting", "psytrance"),
+    "peak": ("peak", "peaktime", "peak time"),
+    "acid": ("acid", "303", "tb303"),
+    "minimal": ("minimal", "mintech"),
+    "dub": ("dub", "dubtechno", "dub techno"),
+    "ambient": ("ambient", "downtempo", "atmospheric"),
+    "drum": ("drum", "dnb", "drum and bass", "jungle"),
+    "bass": ("bass music", "uk bass", "halftime"),
+    "break": ("break", "breaks", "breakbeat"),
+    "garage": ("garage", "ukg", "2step", "2-step"),
+    "trap": ("trap", "hybrid trap"),
+    "hip": ("hip hop", "hiphop", "boom bap"),
+    "hop": ("hip hop", "hiphop"),
+    "idm": ("idm", "glitch", "experimental"),
+    "industrial": ("industrial", "ebm"),
+    "electro": ("electro", "electroclash"),
+    "progressive": ("progressive", "prog"),
+    "organic": ("organic", "live"),
+    "cinematic": ("cinematic", "trailer", "orchestral"),
+}
+
+# Genres we can surface from pack/path text (specific phrases before broad ones in list
+# only for readability; each label is scored independently).
+_CATALOG_STYLE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("Melodic Techno", re.compile(r"melodic[\s_-]*techno", re.I)),
+    ("Hard Techno", re.compile(r"hard[\s_-]*techno|hardgroove|hard[\s_-]*groove", re.I)),
+    ("Dub Techno", re.compile(r"dub[\s_-]*techno", re.I)),
+    ("Tech House", re.compile(r"tech[\s_-]*house", re.I)),
+    ("Melodic House", re.compile(r"melodic[\s_-]*house", re.I)),
+    ("Afro House", re.compile(r"afro[\s_-]*house", re.I)),
+    ("Deep House", re.compile(r"deep[\s_-]*house", re.I)),
+    ("Bass House", re.compile(r"bass[\s_-]*house", re.I)),
+    ("Peak Time", re.compile(r"peak[\s_-]*time", re.I)),
+    ("Hard Dance", re.compile(r"hard[\s_-]*dance", re.I)),
+    ("Drum & Bass", re.compile(r"drum[\s_-]*(?:and|&)[\s_-]*bass|\bdnb\b|\bd&b\b|\bjungle\b", re.I)),
+    ("Hip Hop", re.compile(r"hip[\s_-]*hop|boom[\s_-]*bap", re.I)),
+    ("Progressive", re.compile(r"progressive|prog[\s_-]*house|prog[\s_-]*techno", re.I)),
+    ("Eurodance", re.compile(r"eurodance|euro[\s_-]*dance", re.I)),
+    ("Techno", re.compile(r"techno|tekno", re.I)),
+    ("Trance", re.compile(r"\btrance\b|psytrance|uplifting", re.I)),
+    ("House", re.compile(r"\bhouse\b", re.I)),
+    ("Phonk", re.compile(r"\bphonk\b", re.I)),
+    ("Ambient", re.compile(r"ambient|downtempo|atmospheric", re.I)),
+    ("Cinematic", re.compile(r"cinematic|trailer", re.I)),
+    ("Acid", re.compile(r"\bacid\b|tb[\s_-]?303|\b303\b", re.I)),
+    ("Minimal", re.compile(r"minimal|mintech", re.I)),
+    ("Industrial", re.compile(r"industrial|\bebm\b", re.I)),
+    ("Electro", re.compile(r"\belectro\b", re.I)),
+    ("Garage", re.compile(r"\bgarage\b|\bukg\b|2[\s_-]*step", re.I)),
+    ("Trap", re.compile(r"\btrap\b", re.I)),
+    ("Breakbeat", re.compile(r"breakbeat|\bbreaks\b", re.I)),
+    ("IDM", re.compile(r"\bidm\b|glitch", re.I)),
+    ("Organic", re.compile(r"\borganic\b", re.I)),
+    ("Dub", re.compile(r"\bdub\b", re.I)),
+]
+
+
+def catalog_style_suggestions(
+    catalog: Catalog,
+    *,
+    limit: int = 10,
+    min_packs: int = 1,
+    min_assets: int = 2,
+) -> list[dict[str, Any]]:
+    """
+    Rank genre labels by how often they appear in *this* library's pack names.
+
+    Uses sample packs only (Serum folders are instrument categories, not genres).
+    Returns up to `limit` items: {label, packs, assets}. Never invents styles
+    that have no pack hits — empty catalog → [].
+    """
+    from collections import Counter
+
+    pack_assets: Counter[str] = Counter()
+    pack_blob: dict[str, str] = {}
+    for a in catalog.samples:
+        pack = (a.pack or "").strip()
+        if not pack:
+            continue
+        pack_assets[pack] += 1
+        if pack not in pack_blob:
+            # Pack name dominates; path helps catch folder tags
+            pack_blob[pack] = f"{pack} {(a.parent or '')} {(a.path or '')}".lower()
+
+    asset_hits: Counter[str] = Counter()
+    pack_hits: Counter[str] = Counter()
+    for pack, n in pack_assets.items():
+        blob = pack_blob.get(pack, pack.lower())
+        for label, pat in _CATALOG_STYLE_PATTERNS:
+            if pat.search(pack) or pat.search(blob):
+                asset_hits[label] += n
+                pack_hits[label] += 1
+
+    ranked = sorted(
+        asset_hits.items(),
+        key=lambda kv: (-kv[1], -pack_hits[kv[0]], kv[0].lower()),
+    )
+    out: list[dict[str, Any]] = []
+    for label, assets in ranked:
+        packs = pack_hits[label]
+        if packs < min_packs or assets < min_assets:
+            continue
+        out.append({"label": label, "packs": packs, "assets": assets})
+        if len(out) >= max(1, min(limit, 10)):
+            break
+    return out
+
+
+# Milder lean on drums/FX so cross-genre kits stay common.
+_STYLE_ROLE_STRENGTH: dict[str, float] = {
+    "kick": 0.35,
+    "clap": 0.35,
+    "snare": 0.35,
+    "hats": 0.4,
+    "perc": 0.4,
+    "fx": 0.45,
+    "loop": 0.55,
+    "vocal": 0.75,
+    "lead_audio": 0.85,
+    "bass": 1.0,
+    "lead": 1.0,
+    "pad": 1.0,
+    "pads": 1.0,
+    "brass": 0.9,
+    "chorus": 0.85,
+    "guitar": 0.9,
+    "keys": 0.9,
+    "strings": 0.9,
+}
+
+
+def style_tokens(style: str | None) -> list[str]:
+    """
+    Tokenize free-text style into match terms.
+    Empty / no-preference markers → [] (true random picks).
+    """
+    raw = (style or "").strip().lower()
+    if raw in _NO_STYLE_MARKERS:
+        return []
+    # Split on common separators; keep multi-word phrases as well as parts
+    parts = [p for p in re.split(r"[\s,/|+&]+", raw) if p and p not in _NO_STYLE_MARKERS]
+    if not parts and raw not in _NO_STYLE_MARKERS:
+        parts = [raw]
+    tokens: list[str] = []
+    seen: set[str] = set()
+
+    def add(term: str) -> None:
+        t = term.strip().lower()
+        if len(t) < 2 or t in seen or t in _NO_STYLE_MARKERS:
+            return
+        seen.add(t)
+        tokens.append(t)
+
+    # Full phrase first (e.g. "melodic techno", "tech house")
+    if " " in raw or "-" in raw:
+        add(raw.replace("-", " "))
+        add(raw.replace(" ", "").replace("-", ""))
+
+    for p in parts:
+        add(p)
+        add(p.replace("-", ""))
+        for syn in _STYLE_SYNONYMS.get(p, ()):
+            add(syn)
+        # Multi-word synonym heads (first word of compound keys handled above)
+        for key, syns in _STYLE_SYNONYMS.items():
+            if key in p or p in key:
+                for syn in syns:
+                    add(syn)
+
+    return tokens
+
+
+def _token_in_blob(token: str, blob: str) -> bool:
+    """Match token with soft boundaries (underscores, hyphens, path seps)."""
+    if not token or not blob:
+        return False
+    # Prefer whole-token match so "tech" does not hit "technology" mid-word oddly;
+    # still allow pack-style underscore boundaries.
+    if len(token) <= 2:
+        return bool(
+            re.search(
+                rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])",
+                blob,
+                re.I,
+            )
+        )
+    if token in blob:
+        return True
+    return bool(
+        re.search(
+            rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])",
+            blob,
+            re.I,
+        )
+    )
+
+
+def style_affinity(asset: Asset, tokens: list[str]) -> float:
+    """
+    Soft 0..1 affinity from pack / path / name hits.
+    0 = no match (still eligible); higher = more style-aligned.
+    """
+    if not tokens:
+        return 0.0
+    pack = (asset.pack or "").lower()
+    name = (asset.name or "").lower()
+    path = (asset.path or "").lower().replace("\\", "/")
+    parent = (asset.parent or "").lower()
+    category = (asset.category or "").lower()
+    role = (asset.role or "").lower()
+    score = 0.0
+    for tok in tokens:
+        if _token_in_blob(tok, pack):
+            score += 4.0
+        if _token_in_blob(tok, path) or _token_in_blob(tok, parent):
+            score += 2.5
+        if _token_in_blob(tok, name):
+            score += 2.0
+        if category and _token_in_blob(tok, category):
+            score += 1.0
+        if role and _token_in_blob(tok, role):
+            score += 0.5
+    # Cap so a few strong hits dominate without extreme weight skew
+    return min(1.0, score / 8.0)
+
+
+def style_weight(asset: Asset, tokens: list[str], slot: str) -> float:
+    """
+    Sampling weight. Floor 1.0 so non-matching assets stay in the pool.
+    """
+    if not tokens:
+        return 1.0
+    strength = _STYLE_ROLE_STRENGTH.get(slot, 0.8)
+    # Base boost scale: drums stay mild; melodic slots lean harder
+    boost = 6.0 * strength * style_affinity(asset, tokens)
+    return 1.0 + boost
+
+
+def pick_from_pool(pool: list[Asset], *, style: str | None = None, slot: str = "") -> Asset:
+    """Uniform random when style is empty; weighted otherwise. Never filters out."""
+    if len(pool) == 1:
+        return pool[0]
+    tokens = style_tokens(style)
+    if not tokens:
+        return random.choice(pool)
+    weights = [style_weight(a, tokens, slot) for a in pool]
+    return random.choices(pool, weights=weights, k=1)[0]
+
+
 def pick_asset(
     catalog: Catalog,
     slot: str,
@@ -179,6 +453,7 @@ def pick_asset(
     serum_type: str = "any",
     filter_risers: bool = False,
     filter_factory_serum: bool = False,
+    style: str | None = None,
 ) -> Asset | None:
     pool = _pool_for_slot(catalog, slot, serum_type=serum_type)
     if not pool:
@@ -209,7 +484,7 @@ def pick_asset(
             pool = kept  # strict: empty → no match (no factory fallback)
     if not pool:
         return None
-    return random.choice(pool)
+    return pick_from_pool(pool, style=style, slot=slot)
 
 
 def _asset_to_slot_dict(slot: str, asset: Asset, *, locked: bool = False) -> dict[str, Any]:
@@ -299,6 +574,7 @@ def generate_loop(
             serum_type=stype,
             filter_risers=filter_risers,
             filter_factory_serum=filter_factory_serum,
+            style=style,
         )
         if asset is None:
             slots_out[slot] = {
@@ -369,6 +645,7 @@ def generate_tracks(
             serum_type=stype,
             filter_risers=filter_risers,
             filter_factory_serum=filter_factory_serum,
+            style=style,
         )
         if asset is None:
             slots_out[tid] = {
@@ -397,6 +674,7 @@ def reroll_slot(
     serum_type: str = "any",
     filter_risers: bool = False,
     filter_factory_serum: bool = False,
+    style: str | None = None,
 ) -> dict[str, Any]:
     if slot == "fx" and random.random() < 0.25:
         return {
@@ -419,6 +697,7 @@ def reroll_slot(
         serum_type=serum_type,
         filter_risers=filter_risers,
         filter_factory_serum=filter_factory_serum,
+        style=style,
     )
     if asset is None:
         return {

@@ -8,6 +8,7 @@ real project instead of only drag-and-drop clips.
 from __future__ import annotations
 
 import gzip
+import os
 import re
 import shutil
 import wave
@@ -18,8 +19,8 @@ import xml.etree.ElementTree as ET
 
 TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "live_set_template.xml"
 
-# RelativePathType: 3 = relative to the Live Set's project folder
-_PROJECT_RELATIVE = "3"
+# RelativePathType 6 = project-relative (Live 12 user sets; matches real FileRefs)
+_PROJECT_RELATIVE = "6"
 
 # Live 12-only / rejected nodes that trigger "unknown class …" corrupt errors
 _DROP_TAGS = frozenset(
@@ -47,17 +48,160 @@ def _strip_unknown_live_nodes(root: ET.Element) -> None:
                     changed = True
 
 
+def _normalize_track_grouping(root: ET.Element) -> None:
+    """
+    Stem exports are flat (no GroupTrack). Live errors with
+    \"track grouping corrupt\" if any track still has TrackGroupId
+    pointing at a missing group, or routes AudioOut/GroupTrack.
+    """
+    # Drop any GroupTrack leftovers
+    ls = root.find("LiveSet")
+    tracks_el = ls.find("Tracks") if ls is not None else None
+    if tracks_el is not None:
+        for t in list(tracks_el):
+            if t.tag == "GroupTrack":
+                tracks_el.remove(t)
+
+    for el in root.iter("TrackGroupId"):
+        if "Value" in el.attrib:
+            el.set("Value", "-1")
+    for el in root.iter("LinkedTrackGroupId"):
+        if "Value" in el.attrib:
+            el.set("Value", "-1")
+
+    # Empty LinkedTrackGroups container if present
+    if ls is not None:
+        ltg = ls.find("LinkedTrackGroups")
+        if ltg is not None:
+            for c in list(ltg):
+                ltg.remove(c)
+
+    # Audio routed into a group that no longer exists → Master
+    for routing in root.iter("AudioOutputRouting"):
+        target = routing.find("Target")
+        if target is None:
+            continue
+        val = (target.get("Value") or "").strip()
+        if "GroupTrack" in val or val in ("", "AudioOut/None"):
+            target.set("Value", "AudioOut/Master")
+            upper = routing.find("UpperDisplayString")
+            if upper is not None:
+                upper.set("Value", "Master")
+            lower = routing.find("LowerDisplayString")
+            if lower is not None:
+                lower.set("Value", "")
+
+
+# Live 12.2+ ScaleInformation.Name is an int index, not "Major"/"Minor" strings.
+# Older templates use RootNote + string Name → Live error:
+#   "unexpected value for int node: major"
+_SCALE_NAME_TO_ID = {
+    "major": "0",
+    "maj": "0",
+    "minor": "5",
+    "min": "5",
+    "dorian": "1",
+    "mixolydian": "2",
+    "lydian": "3",
+    "phrygian": "4",
+    "locrian": "6",
+    "whole tone": "7",
+    "half-whole dim": "8",
+    "whole-half dim": "9",
+    "minor blues": "10",
+    "minor pentatonic": "11",
+    "major pentatonic": "12",
+    "harmonic minor": "13",
+    "harmonic major": "14",
+    "dorian #4": "15",
+    "phrygian dominant": "16",
+    "melodic minor": "17",
+    "l melodic minor": "18",
+    "super locrian": "19",
+    "8-tone spanish": "20",
+    "bhairav": "21",
+    "hungarian minor": "22",
+    "hirajoshi": "23",
+    "in-sen": "24",
+    "iwato": "25",
+    "kumoi": "26",
+    "pelog": "27",
+    "spanish": "28",
+}
+
+
+def _scale_name_to_id(raw: str | None) -> str:
+    """Map scale name string or int-ish value → Live 12 int id string."""
+    if raw is None or raw == "":
+        return "0"
+    s = str(raw).strip()
+    try:
+        return str(int(s))
+    except ValueError:
+        pass
+    return _SCALE_NAME_TO_ID.get(s.lower(), "0")
+
+
+def _normalize_scale_information(root: ET.Element) -> None:
+    """
+    Live 12.2 clip + LiveSet ScaleInformation:
+
+      <ScaleInformation>
+        <Root Value="0" />
+        <Name Value="0" />   <!-- int scale index, NOT "Major" -->
+      </ScaleInformation>
+
+    Pre-12.2 templates used RootNote + string Name ("Major"), which Live 12.2
+    rejects as: unexpected value for int node: major
+    """
+    for si in root.iter("ScaleInformation"):
+        root_note = si.find("RootNote")
+        root_el = si.find("Root")
+        if root_note is not None:
+            val = root_note.get("Value", "0")
+            if root_el is None:
+                root_note.tag = "Root"
+                root_el = root_note
+            else:
+                if not root_el.get("Value"):
+                    root_el.set("Value", val)
+                si.remove(root_note)
+        if root_el is None:
+            root_el = ET.Element("Root", Value="0")
+            si.insert(0, root_el)
+        try:
+            root_el.set("Value", str(int(float(root_el.get("Value") or "0"))))
+        except (TypeError, ValueError):
+            root_el.set("Value", "0")
+
+        name_el = si.find("Name")
+        if name_el is None:
+            name_el = ET.Element("Name", Value="0")
+            si.append(name_el)
+        name_el.set("Value", _scale_name_to_id(name_el.get("Value")))
+
+
+def _beat_str(v: float) -> str:
+    """Format beat times the way Live writes them (no trailing .0 when whole)."""
+    f = float(v)
+    if abs(f - round(f)) < 1e-9:
+        return str(int(round(f)))
+    return repr(float(f))
+
+
 def _load_template(path: Path) -> ET.Element:
     raw = path.read_text(encoding="utf-8")
-    # Live 12 Master bus rename — Live 11 needs Master
+    # Live 12 Master bus rename — keep Master for broader open compatibility
     raw = raw.replace("AudioOut/Main", "AudioOut/Master")
     root = ET.fromstring(raw)
     _strip_unknown_live_nodes(root)
-    # Compatible header (Live 12 still opens Live 11 sets)
+    _normalize_scale_information(root)
+    _normalize_track_grouping(root)
+    # Live 12 header (user machines are on Live 12; still opens fine)
     root.set("MajorVersion", "5")
-    root.set("MinorVersion", "11.0_11300")
+    root.set("MinorVersion", "12.0_12203")
     root.set("SchemaChangeCount", "3")
-    root.set("Creator", "Ableton Live 11.3.21")
+    root.set("Creator", "Ableton Live 12.2.6")
     root.set("Revision", "reroll-als-export")
     return root
 
@@ -97,13 +241,61 @@ def _set_all(root: ET.Element, tag: str, value: str) -> None:
             el.set("Value", value)
 
 
+# Id attrs that are *list indices* (may repeat across the document).
+# Everything else with Id= is treated as a global pointee-space id.
+_LIST_LOCAL_ID_TAGS = frozenset(
+    {
+        "ClipSlot",
+        "WarpMarker",
+        "Scene",
+        "AutomationLane",
+        "AutomationEnvelope",
+        "EnumEvent",
+        "FloatEvent",
+        "BoolEvent",
+        "Breakpoint",
+        "TrackSendHolder",
+        "SendPreBool",
+        "FileRef",
+        "FilePresetRef",
+        "BranchSourceContext",
+        "MidiEditorLaneModel",
+        "RemoteableTimeSignature",
+        "RemoteableFloat",
+        "AudioClip",
+        "MidiClip",
+        "AudioSequencer",
+        "GroupTrackSlot",
+        "KeyTrack",
+        "Notes",
+        "KeyTracks",
+        "ExpressionLane",
+        "ContentLane",
+        "Locator",
+        "ArpeggiateAlgorithm",
+        "ScaleInformation",  # no Id usually
+    }
+)
+
+
 def _renumber_ids(track: ET.Element, base_id: int) -> int:
-    """Assign unique Id attributes under a track subtree. Returns next free id."""
+    """
+    Per-track pass: unique-ify non-list-local Ids under one track clone.
+
+    Prefer ``_finalize_unique_pointee_ids`` on the whole document afterward.
+    """
     n = base_id
     for el in track.iter():
-        if "Id" in el.attrib:
-            el.set("Id", str(n))
-            n += 1
+        if "Id" not in el.attrib:
+            continue
+        if el.tag in _LIST_LOCAL_ID_TAGS:
+            continue
+        try:
+            int(el.attrib["Id"])
+        except (TypeError, ValueError):
+            continue
+        el.set("Id", str(n))
+        n += 1
     return n
 
 
@@ -119,6 +311,88 @@ def _max_id_in_tree(root: ET.Element) -> int:
         except (TypeError, ValueError):
             continue
     return m
+
+
+def _clear_automation_envelopes(root: ET.Element) -> int:
+    """Drop AutomationEnvelope nodes (stem export needs none; avoids dangling PointeeId)."""
+    n = 0
+    for parent in list(root.iter()):
+        for child in list(parent):
+            if child.tag == "AutomationEnvelope":
+                parent.remove(child)
+                n += 1
+    return n
+
+
+def _finalize_unique_pointee_ids(root: ET.Element) -> dict[str, int]:
+    """
+    Live error: \"non-unique pointee IDs\".
+
+    Factory sets give every RemoteableObject a unique Id (Pointee, AutomationTarget,
+    ModulationTarget, Track, …). Cloning AudioTracks without reassigning those
+    Ids leaves triples of the same AutomationTarget Id → Live refuses the set.
+
+    List-local Ids (ClipSlot 0..n-1, WarpMarker, Scene, …) must NOT be uniquified.
+    """
+    # 1) Clear envelopes that reference track/device pointees we may rewrite
+    n_env = _clear_automation_envelopes(root)
+
+    # 2) Assign unique Ids to every non-list-local Id= in document order
+    n = 1
+    n_reassigned = 0
+    for el in root.iter():
+        if "Id" not in el.attrib:
+            continue
+        if el.tag in _LIST_LOCAL_ID_TAGS:
+            continue
+        try:
+            int(el.attrib["Id"])
+        except (TypeError, ValueError):
+            continue
+        el.set("Id", str(n))
+        n += 1
+        n_reassigned += 1
+
+    # 3) Explicit <Pointee Id> must be unique (covered above) — also ensure
+    #    every Pointee has an Id
+    for p in root.iter("Pointee"):
+        if "Id" not in p.attrib:
+            p.set("Id", str(n))
+            n += 1
+            n_reassigned += 1
+
+    # 4) NextPointeeId strictly above every assigned id
+    next_pointee = n + 100
+    for npi in root.iter("NextPointeeId"):
+        npi.set("Value", str(next_pointee))
+
+    # 5) Verify no duplicate Pointee Ids
+    seen: dict[str, int] = {}
+    dups = 0
+    for p in root.iter("Pointee"):
+        pid = p.get("Id")
+        if pid is None:
+            continue
+        seen[pid] = seen.get(pid, 0) + 1
+    dups = sum(1 for c in seen.values() if c > 1)
+
+    # 6) Verify no duplicate non-list-local Ids
+    global_ids: dict[str, int] = {}
+    for el in root.iter():
+        if "Id" not in el.attrib or el.tag in _LIST_LOCAL_ID_TAGS:
+            continue
+        i = el.attrib["Id"]
+        global_ids[i] = global_ids.get(i, 0) + 1
+    global_dups = sum(1 for c in global_ids.values() if c > 1)
+
+    return {
+        "next_pointee_id": next_pointee,
+        "reassigned": n_reassigned,
+        "envelopes_cleared": n_env,
+        "pointee_dups": dups,
+        "global_dups": global_dups,
+        "max_id": n - 1,
+    }
 
 
 def _strip_returns_and_sends(root: ET.Element) -> dict[str, int]:
@@ -250,6 +524,7 @@ def _normalize_session_slots(root: ET.Element, n_slots: int = 1) -> dict[str, in
         if scene_proto is not None:
             for i in range(n_slots):
                 sc = deepcopy(scene_proto)
+                sc.set("Id", str(i))
                 name_el = sc.find("Name")
                 if name_el is not None:
                     name_el.set("Value", "Reroll" if i == 0 else "")
@@ -332,48 +607,209 @@ def _session_audio_clips(track: ET.Element) -> list[ET.Element]:
     return clips
 
 
-def _set_clip_timing(clip: ET.Element, *, name: str, beat_length: float, sec_length: float) -> None:
-    """Length, loop, and warp markers for a 4-bar (or N-bar) clip."""
-    beat_s = str(float(beat_length))
-    clip.set("Time", "0")
+def _ensure_live12_clip_fields(clip: ET.Element) -> None:
+    """Live 12 arrangement clips include IsInKey + ScaleInformation."""
+    if clip.find("IsInKey") is None:
+        take = clip.find("TakeId")
+        el = ET.Element("IsInKey", Value="false")
+        if take is not None:
+            idx = list(clip).index(take) + 1
+            clip.insert(idx, el)
+        else:
+            clip.append(el)
+    if clip.find("ScaleInformation") is None:
+        si = ET.Element("ScaleInformation")
+        ET.SubElement(si, "Root", Value="0")
+        ET.SubElement(si, "Name", Value="0")
+        is_in_key = clip.find("IsInKey")
+        if is_in_key is not None:
+            idx = list(clip).index(is_in_key) + 1
+            clip.insert(idx, si)
+        else:
+            clip.append(si)
+
+
+def _fix_sampleref_live12(
+    clip: ET.Element,
+    *,
+    rel_sample: str,
+    abs_sample: Path,
+    frames: int,
+    rate: int,
+    size: int,
+) -> None:
+    """
+    Match real Live 12.2 FileRef / SampleRef shape:
+
+      FileRef: RelativePathType, RelativePath, Path, Type, LivePackName,
+               LivePackId, OriginalFileSize, OriginalCrc
+      SampleRef: FileRef, LastModDate, SourceContext (empty), SampleUsageHint,
+                 DefaultDuration, DefaultSampleRate, SamplesToAutoWarp
+
+    Do NOT invent SourceHint — real 12.2 sets do not have it.
+    """
+    rel = rel_sample.replace("\\", "/")
+    abs_path = str(abs_sample.resolve()).replace("\\", "/")
+    mtime = "0"
+    try:
+        mtime = str(int(abs_sample.stat().st_mtime))
+    except OSError:
+        pass
+
+    path_type = _PROJECT_RELATIVE  # "6"
+
+    for fr in clip.iter("FileRef"):
+        # Remove non-schema kids (SourceHint was a prior mistaken inject)
+        for child in list(fr):
+            if child.tag == "SourceHint":
+                fr.remove(child)
+        for el in fr:
+            if el.tag == "RelativePathType":
+                el.set("Value", path_type)
+            elif el.tag == "RelativePath":
+                el.set("Value", rel)
+            elif el.tag == "Path":
+                el.set("Value", abs_path)
+            elif el.tag == "Type":
+                el.set("Value", "1")
+            elif el.tag == "OriginalFileSize":
+                el.set("Value", str(size))
+            elif el.tag == "OriginalCrc":
+                el.set("Value", el.get("Value") or "0")
+            elif el.tag == "LivePackName":
+                el.set("Value", "")
+            elif el.tag == "LivePackId":
+                el.set("Value", "")
+
+    for sr in clip.iter("SampleRef"):
+        # Flatten SourceContext to empty element (Live 12.2 style)
+        sc = sr.find("SourceContext")
+        if sc is not None:
+            for child in list(sc):
+                sc.remove(child)
+            sc.attrib.clear()
+            sc.text = None
+        else:
+            sc = ET.Element("SourceContext")
+            lmd = sr.find("LastModDate")
+            if lmd is not None:
+                sr.insert(list(sr).index(lmd) + 1, sc)
+            else:
+                sr.insert(0, sc)
+
+        lmd = sr.find("LastModDate")
+        if lmd is not None:
+            lmd.set("Value", mtime)
+        dd = sr.find("DefaultDuration")
+        if dd is not None:
+            dd.set("Value", str(frames))
+        dsr = sr.find("DefaultSampleRate")
+        if dsr is not None:
+            dsr.set("Value", str(rate))
+        if sr.find("SamplesToAutoWarp") is None:
+            saw = ET.Element("SamplesToAutoWarp", Value="1")
+            dsr_el = sr.find("DefaultSampleRate")
+            if dsr_el is not None:
+                sr.insert(list(sr).index(dsr_el) + 1, saw)
+            else:
+                sr.append(saw)
+        else:
+            _set_value(sr, "SamplesToAutoWarp", "1")
+
+
+def _set_clip_timing(
+    clip: ET.Element,
+    *,
+    name: str,
+    beat_length: float,
+    sec_length: float,
+    arrangement: bool = False,
+    arr_time: float = 0.0,
+    bpm: float = 140.0,
+) -> None:
+    """
+    Length, loop, and warp markers.
+
+    Session: warped clip-local 0…beat_length (works for Session launching).
+    Arrangement (Live 12): absolute Time/CurrentStart/CurrentEnd. Prefer
+    unwarped clips matching factory lesson sets so Live draws waveforms.
+    """
+    t0 = float(arr_time) if arrangement else 0.0
+
+    # Session + arrangement: keep WARPED clips with matching SecTime/BeatTime.
+    # Unwarped arrangement with CurrentEnd >> sample length hard-crashes some Live builds.
+    length_s = _beat_str(beat_length)
+    start_s = _beat_str(t0)
+    end_s = _beat_str(t0 + float(beat_length))
+    sec = max(0.001, float(sec_length))
+
+    clip.set("Time", start_s if arrangement else "0")
     _set_value(clip, "Name", name)
-    _set_value(clip, "CurrentStart", "0")
-    _set_value(clip, "CurrentEnd", beat_s)
+    if arrangement:
+        # Arrangement uses absolute song time for CurrentStart/End
+        _set_value(clip, "CurrentStart", start_s)
+        _set_value(clip, "CurrentEnd", end_s)
+    else:
+        _set_value(clip, "CurrentStart", "0")
+        _set_value(clip, "CurrentEnd", length_s)
     _set_value(clip, "IsWarped", "true")
+    _set_value(clip, "Disabled", "false")
+    _set_value(clip, "TakeId", "1")
+
     loop = clip.find("Loop")
     if loop is not None:
+        # Loop region is always clip-local 0…beat_length
         _set_value(loop, "LoopOn", "true")
         _set_value(loop, "LoopStart", "0")
-        _set_value(loop, "LoopEnd", beat_s)
+        _set_value(loop, "LoopEnd", length_s)
         _set_value(loop, "StartRelative", "0")
-        _set_value(loop, "OutMarker", beat_s)
+        _set_value(loop, "OutMarker", length_s)
         for tag in ("HiddenLoopStart", "HiddenLoopEnd"):
             h = loop.find(tag)
             if h is not None and "Value" in h.attrib:
-                h.set("Value", "0" if "Start" in tag else beat_s)
+                h.set("Value", "0" if "Start" in tag else length_s)
 
-    # Map full sample duration → beat_length so the clip spans the loop
     markers = clip.find("WarpMarkers")
     if markers is not None:
         for child in list(markers):
             markers.remove(child)
-        sec = max(0.001, float(sec_length))
         ET.SubElement(markers, "WarpMarker", Id="0", SecTime="0", BeatTime="0")
         ET.SubElement(
             markers,
             "WarpMarker",
             Id="1",
-            SecTime=str(sec),
-            BeatTime=beat_s,
+            SecTime=repr(float(sec)),
+            BeatTime=length_s,
         )
 
+    scroller = clip.find("ScrollerTimePreserver")
+    if scroller is not None:
+        _set_value(scroller, "LeftTime", "0")
+        _set_value(scroller, "RightTime", _beat_str(beat_length))
 
-def _place_arrangement_clips(track: ET.Element, *, beat_length: float) -> int:
+    _ensure_live12_clip_fields(clip)
+
+
+def _place_arrangement_clips(
+    track: ET.Element,
+    *,
+    beat_length: float,
+    sec_length: float,
+    name: str,
+    bpm: float = 140.0,
+    rel_sample: str = "",
+    abs_sample: Path | None = None,
+    frames: int = 0,
+    rate: int = 44100,
+    size: int = 0,
+) -> int:
     """
     Session clips alone do not appear on the Arrangement timeline.
 
     Arrangement audio lives under:
-      MainSequencer/Sample/ArrangerAutomation/Events  →  AudioClip Time="0"
+      MainSequencer/Sample/ArrangerAutomation/Events  →  AudioClip Time=\"…\"
+
+    Live 12: absolute CurrentStart/CurrentEnd, flat SampleRef, often unwarped.
     """
     session_clips = _session_audio_clips(track)
     if not session_clips:
@@ -390,35 +826,70 @@ def _place_arrangement_clips(track: ET.Element, *, beat_length: float) -> int:
         events = arr.find("Events")
         if events is None:
             events = ET.SubElement(arr, "Events")
-        # Clear any leftover template arrangement events
         for child in list(events):
             events.remove(child)
 
-        # One clip starting at bar 1 (Time is arrangement beat position)
-        src = session_clips[0]
-        arr_clip = deepcopy(src)
-        arr_clip.set("Time", "0")
-        _set_value(arr_clip, "CurrentStart", "0")
-        _set_value(arr_clip, "CurrentEnd", str(float(beat_length)))
+        arr_clip = deepcopy(session_clips[0])
+        _set_clip_timing(
+            arr_clip,
+            name=name,
+            beat_length=beat_length,
+            sec_length=sec_length,
+            arrangement=True,
+            arr_time=0.0,
+            bpm=bpm,
+        )
+        if abs_sample is not None and rel_sample:
+            _fix_sampleref_live12(
+                arr_clip,
+                rel_sample=rel_sample,
+                abs_sample=abs_sample,
+                frames=frames or int(sec_length * rate),
+                rate=rate or 44100,
+                size=size,
+            )
         events.append(arr_clip)
         placed += 1
+
+        for tag, val in (
+            ("SavedPlayingSlot", "-1"),
+            ("SavedPlayingOffset", "0"),
+            ("NeedArrangerRefreeze", "false"),
+        ):
+            for el in track.iter(tag):
+                if "Value" in el.attrib:
+                    el.set("Value", val)
+        # Do not invent ArrangementClipsListWrapper / TakeLanesListWrapper —
+        # factory DefaultLiveSet AudioTracks omit them; injecting crashed Live.
         break
     return placed
 
 
 def _configure_transport(ls: ET.Element, *, beat_length: float) -> None:
     """Enable the arrangement loop brace over [0, beat_length) beats (e.g. 4 bars)."""
-    beat_s = str(float(beat_length))
+    beat_s = _beat_str(beat_length)
     for transport in ls.iter("Transport"):
         _set_value(transport, "LoopOn", "true")
         _set_value(transport, "LoopStart", "0")
         _set_value(transport, "LoopLength", beat_s)
         _set_value(transport, "LoopIsSongStart", "true")
         _set_value(transport, "CurrentTime", "0")
-    # Selection / follow region
+    # Selection / follow region (LiveSet-level TimeSelection)
     for ts in ls.findall("TimeSelection"):
         _set_value(ts, "AnchorTime", "0")
         _set_value(ts, "OtherTime", beat_s)
+    # Arrangement overview zoom so the loop is visible
+    for nav in ls.iter("SequencerNavigator"):
+        helper = nav.find("BeatTimeHelper")
+        if helper is not None:
+            zoom = helper.find("CurrentZoom")
+            # Smaller zoom value ≈ more zoomed out in many Live versions
+            if zoom is not None:
+                zoom.set("Value", "0.35")
+        sp = nav.find("ScrollerPos")
+        if sp is not None:
+            sp.set("X", "0")
+            sp.set("Y", "0")
 
 
 def _configure_audio_track(
@@ -430,6 +901,7 @@ def _configure_audio_track(
     abs_sample: Path,
     beat_length: float,
     color: int,
+    bpm: float = 140.0,
 ) -> int:
     """Mutate a cloned AudioTrack for one stem. Returns next free Id."""
     track.set("Id", str(track_id))
@@ -452,14 +924,17 @@ def _configure_audio_track(
     if color_el is not None:
         color_el.set("Value", str(color % 70))
 
-    # Sample path refs
+    abs_fwd = str(abs_sample.resolve()).replace("\\", "/")
+    rel_fwd = rel_sample.replace("\\", "/")
+
+    # Sample path refs (session + any existing refs on the track)
     for el in track.iter("RelativePath"):
-        el.set("Value", rel_sample.replace("\\", "/"))
+        el.set("Value", rel_fwd)
     for el in track.iter("RelativePathType"):
+        # Live 12.2 project samples use type 6 (not classic 3)
         el.set("Value", _PROJECT_RELATIVE)
     for el in track.iter("Path"):
-        # Absolute path helps Live locate if relative fails
-        el.set("Value", str(abs_sample.resolve()))
+        el.set("Value", abs_fwd)
     for el in track.iter("OriginalFileSize"):
         el.set("Value", str(size))
     for el in track.iter("DefaultDuration"):
@@ -473,14 +948,20 @@ def _configure_audio_track(
     for el in track.iter("BrowserContentPath"):
         el.set("Value", "")
 
-    # Session clip timing first
+    # Session clip timing first (clip-local 0…beat_length)
     for clip in _session_audio_clips(track):
-        _set_clip_timing(clip, name=name, beat_length=beat_length, sec_length=sec_length)
+        _set_clip_timing(
+            clip,
+            name=name,
+            beat_length=beat_length,
+            sec_length=sec_length,
+            arrangement=False,
+            bpm=bpm,
+        )
 
-    # Mirror into Arrangement (empty Events = silent timeline)
-    _place_arrangement_clips(track, beat_length=beat_length)
+    # Arrangement placement is done once in write_als_project (final pass).
 
-    # Unique Ids for nested elements (avoid Live collisions across tracks)
+    # Unique Pointee Ids only (ClipSlot Ids stay 0..n-1)
     return _renumber_ids(track, track_id * 1000 + 1)
 
 
@@ -537,8 +1018,8 @@ def write_als_project(
     except ET.ParseError as exc:
         return {"ok": False, "error": f"ALS template parse failed: {exc}"}
 
-    # Mark generator without breaking Live's Creator version parse
-    root.set("Creator", "Ableton Live 11.3.21")
+    # Mark generator (Live 12 Creator string)
+    root.set("Creator", "Ableton Live 12.2.6")
     root.set("Revision", "reroll-als-export")
 
     ls = root.find("LiveSet")
@@ -575,6 +1056,8 @@ def write_als_project(
     _configure_transport(ls, beat_length=beat_length)
 
     written_samples: list[str] = []
+    # Per-track sample metadata for arrangement final pass
+    track_meta: list[dict[str, Any]] = []
     next_track_id = 10
     next_free_id = 100
     colors = [0, 12, 24, 36, 48, 60, 9, 21, 33, 45]
@@ -593,6 +1076,11 @@ def write_als_project(
 
         track_name = str(item.get("track") or Path(safe_name).stem)[:40]
         rel = f"Samples/Imported/{safe_name}"
+        fr, rt = _wav_frames_and_rate(dest)
+        try:
+            sz = dest.stat().st_size
+        except OSError:
+            sz = 0
 
         track = deepcopy(prototype)
         next_free_id = _configure_audio_track(
@@ -603,8 +1091,20 @@ def write_als_project(
             abs_sample=dest,
             beat_length=beat_length,
             color=colors[i % len(colors)],
+            bpm=bpm_f,
         )
         tracks_el.append(track)
+        track_meta.append(
+            {
+                "name": track_name,
+                "rel": rel,
+                "abs": dest,
+                "frames": fr,
+                "rate": rt,
+                "size": sz,
+                "sec": float(fr) / float(rt or 44100),
+            }
+        )
         next_track_id += 1
 
     if not written_samples:
@@ -616,9 +1116,64 @@ def write_als_project(
 
     # Final pass: never ship Live-12-only classes (MidiEditorLaneModel etc.)
     _strip_unknown_live_nodes(root)
+    # Ensure every ScaleInformation uses int Name (Live 12.2 schema)
+    _normalize_scale_information(root)
+    # Flat track list — no dangling group membership
+    _normalize_track_grouping(root)
+    # Never ship invented FileRef kids (real Live 12.2 has no SourceHint)
+    for fr in root.iter("FileRef"):
+        for child in list(fr):
+            if child.tag == "SourceHint":
+                fr.remove(child)
 
     # Session slots must match scene count on EVERY ClipSlotList in the set
     slot_info = _normalize_session_slots(root, n_slots=1)
+
+    # Session-only stems by default: arrangement AudioClip injection has caused
+    # repeated Live hard-crashes ("serious program error"). Session clips in
+    # scene 1 still open reliably; user can drag to arrangement in Live.
+    # Set REROLL_ALS_ARRANGEMENT=1 to re-enable experimental arrangement clips.
+    arr_placed = 0
+    want_arrangement = os.environ.get("REROLL_ALS_ARRANGEMENT", "").strip() in (
+        "1",
+        "true",
+        "yes",
+    )
+    audio_tracks = tracks_el.findall("AudioTrack")
+    for ti, track in enumerate(audio_tracks):
+        meta = track_meta[ti] if ti < len(track_meta) else {}
+        tname = str(meta.get("name") or "stem")
+        sec_len = float(meta.get("sec") or 1.0)
+        if want_arrangement:
+            arr_placed += _place_arrangement_clips(
+                track,
+                beat_length=beat_length,
+                sec_length=sec_len,
+                name=tname,
+                bpm=bpm_f,
+                rel_sample=str(meta.get("rel") or ""),
+                abs_sample=meta.get("abs"),
+                frames=int(meta.get("frames") or 0),
+                rate=int(meta.get("rate") or 44100),
+                size=int(meta.get("size") or 0),
+            )
+        else:
+            # Ensure arrangement event list exists but is empty (factory shape)
+            for ms in track.iter("MainSequencer"):
+                sample = ms.find("Sample")
+                if sample is None:
+                    continue
+                arr = sample.find("ArrangerAutomation")
+                if arr is None:
+                    continue
+                events = arr.find("Events")
+                if events is not None:
+                    for child in list(events):
+                        events.remove(child)
+        track_base = (10 + ti) * 1000 + 1
+        track.set("Id", str(10 + ti))
+        next_free_id = _renumber_ids(track, track_base)
+        track.set("Id", str(10 + ti))
 
     # Zero returns + zero sends (Live rejects any send/return count mismatch)
     send_info = _strip_returns_and_sends(root)
@@ -628,11 +1183,28 @@ def write_als_project(
     except RuntimeError as exc:
         return {"ok": False, "error": str(exc)}
 
-    # NextPointeeId must be STRICTLY greater than every Id= in the whole set.
-    max_id = max(_max_id_in_tree(root), int(next_free_id or 0), int(next_track_id or 0) * 1000)
-    next_pointee = max(max_id + 10_000, 100_000)
-    for npi in root.iter("NextPointeeId"):
-        npi.set("Value", str(next_pointee))
+    # Global unique pointee-space Ids (cloning tracks otherwise duplicates
+    # AutomationTarget/ModulationTarget Ids → Live: "non-unique pointee IDs")
+    pointee_info = _finalize_unique_pointee_ids(root)
+    if pointee_info.get("pointee_dups") or pointee_info.get("global_dups"):
+        return {
+            "ok": False,
+            "error": (
+                f"ALS pointee uniquify failed: pointee_dups={pointee_info.get('pointee_dups')} "
+                f"global_dups={pointee_info.get('global_dups')}"
+            ),
+        }
+    next_pointee = int(pointee_info["next_pointee_id"])
+    max_id = int(pointee_info["max_id"])
+
+    # Re-assert list-local slot/scene Ids after global pass (untouched, but safe)
+    for csl in root.iter("ClipSlotList"):
+        for i, slot in enumerate(s for s in csl if s.tag == "ClipSlot"):
+            slot.set("Id", str(i))
+    scenes_el = ls.find("Scenes")
+    if scenes_el is not None:
+        for i, sc in enumerate(scenes_el):
+            sc.set("Id", str(i))
 
     xml_body = ET.tostring(root, encoding="utf-8", xml_declaration=True)
     if not xml_body.startswith(b"<?xml"):
@@ -653,6 +1225,10 @@ def write_als_project(
         check_root = ET.fromstring(body_txt)
         _assert_clean_sends(check_root)
         _assert_slot_counts(check_root)
+        # Pointees unique on serialized tree
+        pids = [p.get("Id") for p in check_root.iter("Pointee")]
+        if len(pids) != len(set(pids)):
+            return {"ok": False, "error": "ALS serialize has duplicate Pointee Ids"}
     except Exception as exc:
         return {"ok": False, "error": f"ALS serialize verify failed: {exc}"}
 
@@ -677,10 +1253,20 @@ def write_als_project(
     except Exception as exc:
         return {"ok": False, "error": f"ALS disk verify failed: {exc}"}
 
+    # Count arrangement clips written to disk
+    n_arr_clips = 0
+    for track in disk_root.iter("AudioTrack"):
+        for ms in track.iter("MainSequencer"):
+            ev = ms.find("Sample/ArrangerAutomation/Events")
+            if ev is not None:
+                n_arr_clips += sum(1 for c in ev if c.tag == "AudioClip")
+
     print(
         f"[reroll] ALS OK path={als_path} NextPointeeId={disk_npi_v} "
-        f"scenes={n_sc} slot_list_sizes={list_sizes} "
-        f"(max Id={max_id}, npi_subs={n_sub}, scrub={scrub}, lists={slot_info.get('lists')}) "
+        f"scenes={n_sc} slot_list_sizes={list_sizes} arr_clips={n_arr_clips} "
+        f"(max Id={max_id}, npi_subs={n_sub}, scrub={scrub}, lists={slot_info.get('lists')}, "
+        f"arr_placed={arr_placed}, pointee_reassigned={pointee_info.get('reassigned')}, "
+        f"envelopes_cleared={pointee_info.get('envelopes_cleared')}) "
         f"returns_removed={send_info.get('returns_removed')} "
         f"sends_removed={send_info.get('send_holders_removed')} "
         f"send_pre_removed={send_info.get('send_pre_removed')}",
@@ -696,9 +1282,10 @@ def write_als_project(
                     f"Ableton Live Set: {als_name}",
                     "",
                     "Double-click the .als file (same folder) to open in Live.",
-                    "Session: scene 1 has each stem as a clip.",
-                    "Arrangement: same clips at bar 1, loop brace = full loop length.",
-                    "If Session is launching clips, hit Back to Arrangement (▶←).",
+                    "Press Tab to switch Session ↔ Arrangement.",
+                    "Arrangement: stems laid out from bar 1 (loop brace = full loop).",
+                    "If clips look greyed out, click Back to Arrangement (▶←).",
+                    "Session: scene 1 also has each stem for clip launching.",
                     "Stems: Samples\\Imported\\  ·  flat .wavs = drag-and-drop.",
                     "",
                 ]

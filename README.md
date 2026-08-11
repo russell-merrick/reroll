@@ -243,9 +243,9 @@ exports/
   ABLETON_DROP/                # always the latest export (flat)
 ```
 
-**Preferred:** open the `.als` in Live (double-click or **Open .als project**). Stems live under `Samples/Imported/` with session BPM set.
+**Supported handoff:** drag flat stems onto empty Session/Arrangement space (one track per file), or use Live browser → **User Library → Samples → Reroll**.
 
-**Also:** drag flat stems onto empty Session/Arrangement space (one track per file), or use Live browser → **User Library → Samples → Reroll**.
+**`.als` Live Set (experimental / paused):** code can write a project folder, but **Live still hard-crashes on open** on this machine’s Live 12 builds. Prefer **stems only** (uncheck Write .als). Full attempt log: [`docs/ALS_EXPORT_STATUS.md`](docs/ALS_EXPORT_STATUS.md).
 
 ### Library DB
 
@@ -261,13 +261,14 @@ exports/
 |------|--------|
 | Dynamic tracks | Add / delete; stack any number |
 | Reroll / dice | Unlocked tracks only; Reroll auto-plays |
+| **Style lean** | Soft pack/path weights; suggestions ranked from *your* pack names; No preference = random |
 | Serum 1 / 2 filter | Options + per-track type (BASS, LEAD, …) |
 | MIDI | Monophonic 16-step grids; note length + edge drag |
 | Macros | S1 mapped renames; S2 names from `.SerumPreset` file |
 | Sample loops | BPM warp + kick-cycle re-lock |
 | Serum stems | Offline bounce; re-trigger each loop cycle |
-| **Export** | Audio + MIDI stems for Ableton |
-| **`.als` Live Set** | Optional project folder (session clips + Samples/Imported) |
+| **Export** | Audio + MIDI stems for Ableton (supported) |
+| **`.als` Live Set** | **Paused** — writer exists; Live open still unreliable (see `docs/ALS_EXPORT_STATUS.md`) |
 | **Library DB** | SQLite cache for fast restart |
 | JS synth fallback | If host missing or bounce fails |
 | Mute / solo / lock | Live while playing |
@@ -281,7 +282,6 @@ exports/
 
 | Feature | Notes |
 |---------|--------|
-| **Style / pack-aware Reroll** | Style is mostly a label today — bias picks by style/pack tokens |
 | **“More like this”** | Seed similar sounds from a locked track |
 | **Richer library browser** | Search / filter / preview beyond role counts |
 
@@ -297,7 +297,8 @@ exports/
 | **Serum param editing** | Beyond macros + offline bounce |
 | **Named saves polish** | Session browser UX for `saves/` |
 | **Stale path recovery** | Clear errors when DB paths move off disk |
-| **MIDI tracks in `.als`** | Audio stems in the Live Set today; MIDI still as `.mid` files |
+| **Reliable `.als` open in Live** | Stems work; `.als` generation paused (see `docs/ALS_EXPORT_STATUS.md`) |
+| **MIDI tracks in `.als`** | Would be audio-only in set; MIDI still as `.mid` files |
 
 ### Non-goals for now
 

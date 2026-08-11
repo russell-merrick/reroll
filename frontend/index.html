@@ -53,14 +53,9 @@
       </label>
       <label class="field grow">
         <span>Style</span>
-        <input type="text" id="style" value="Techno" list="style-presets" placeholder="Techno, Melodic Techno…" />
+        <input type="text" id="style" value="No preference" list="style-presets" placeholder="No preference = random · or pick from your library…" />
         <datalist id="style-presets">
-          <option value="Techno" />
-          <option value="Melodic Techno" />
-          <option value="Hard Techno" />
-          <option value="Tech House" />
-          <option value="Trance" />
-          <option value="Peak Time" />
+          <option value="No preference" />
         </datalist>
       </label>
       <button type="button" class="btn primary big" id="btn-generate" data-tip="Reroll unlocked tracks from your library (samples + Serum)">🎲 Reroll</button>
@@ -119,6 +114,10 @@
         <label class="options-row" data-tip="Skip risers, builds/buildups, downlifters, uplifters, drum/snare rolls, sweeps, whooshes">
           <input type="checkbox" id="opt-filter-risers" checked />
           <span class="options-label"><strong>Filter out risers/builds</strong></span>
+        </label>
+        <label class="options-row" data-tip="Show Sierra, cats, unicorn, and barrel of monkeys buttons">
+          <input type="checkbox" id="opt-kid-time" />
+          <span class="options-label"><strong>Kid time</strong></span>
         </label>
         <div class="options-group">
           <div class="options-group-title" data-tip="Sample &amp; Serum folders on disk">Library</div>
@@ -191,6 +190,28 @@
             <button type="button" class="btn ghost" id="btn-save" data-tip="Save this loop with a name (load later from My Loops)">💾 Save loop</button>
             <button type="button" class="btn ghost" id="btn-my-loops" data-tip="Browse and load saved loops">🎧 My Loops</button>
           </div>
+          <div class="kid-time-panel" id="kid-time-panel" hidden>
+            <div class="transport-row">
+              <button type="button" class="btn sierra-btn wide" id="btn-sierra" data-tip="For Sierra 💖">sierra is the best</button>
+            </div>
+            <div class="transport-row">
+              <button type="button" class="btn cats-btn wide" id="btn-cats" data-tip="For Evey &amp; Jasper 🐱">evey and jasper are the cutest, bestest cats ever</button>
+            </div>
+            <div class="transport-row">
+              <button type="button" class="btn unicorn-btn wide" id="btn-unicorn" data-tip="Unicorn magic 🦄">
+                <span class="unicorn-btn-sky" aria-hidden="true">
+                  <span class="unicorn-btn-rainbow"></span>
+                </span>
+                <span class="unicorn-btn-label">unicorn</span>
+              </button>
+            </div>
+            <div class="transport-row">
+              <button type="button" class="btn monkeys-btn wide" id="btn-monkeys" data-tip="10 monkeys in a barrel">
+                <span class="monkeys-btn-bg" aria-hidden="true"></span>
+                <span class="monkeys-btn-label">🐒 barrel of monkeys</span>
+              </button>
+            </div>
+          </div>
           <div
             class="status-bar is-idle"
             id="status-bar"
@@ -205,7 +226,8 @@
           </div>
           <p class="hint">
             <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo<br />
-            <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo
+            <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo<br />
+            <kbd>Ctrl</kbd>+<kbd>R</kbd> reroll
           </p>
         </section>
 
@@ -316,7 +338,115 @@
     </div>
   </dialog>
 
+  <!-- Sierra celebration -->
+  <dialog id="sierra-dialog" class="sierra-dialog" aria-labelledby="sierra-banner-text">
+    <div class="sierra-card">
+      <div class="sierra-fireworks" id="sierra-fireworks" aria-hidden="true"></div>
+      <div class="sierra-banner">
+        <p id="sierra-banner-text">sierra is the best</p>
+      </div>
+      <p class="sierra-sub">💖 forever &amp; always 💖</p>
+      <button type="button" class="btn primary" id="sierra-close">✨ Close</button>
+    </div>
+  </dialog>
+
+  <!-- Evey & Jasper celebration -->
+  <dialog id="cats-dialog" class="cats-dialog" aria-labelledby="cats-title">
+    <div class="cats-card">
+      <div class="cats-pair" aria-hidden="true">
+        <div class="cat-face cat-orange-eyes">
+          <div class="cat-ear cat-ear-l"></div>
+          <div class="cat-ear cat-ear-r"></div>
+          <div class="cat-head">
+            <div class="cat-eye cat-eye-l"><span></span></div>
+            <div class="cat-eye cat-eye-r"><span></span></div>
+            <div class="cat-nose"></div>
+            <div class="cat-mouth"></div>
+            <div class="cat-whisker cat-w-l1"></div>
+            <div class="cat-whisker cat-w-l2"></div>
+            <div class="cat-whisker cat-w-r1"></div>
+            <div class="cat-whisker cat-w-r2"></div>
+          </div>
+        </div>
+        <div class="cat-face cat-green-eyes">
+          <div class="cat-ear cat-ear-l"></div>
+          <div class="cat-ear cat-ear-r"></div>
+          <div class="cat-head">
+            <div class="cat-eye cat-eye-l"><span></span></div>
+            <div class="cat-eye cat-eye-r"><span class="cat-eye-dot"></span></div>
+            <div class="cat-nose"></div>
+            <div class="cat-mouth"></div>
+            <div class="cat-whisker cat-w-l1"></div>
+            <div class="cat-whisker cat-w-l2"></div>
+            <div class="cat-whisker cat-w-r1"></div>
+            <div class="cat-whisker cat-w-r2"></div>
+          </div>
+        </div>
+      </div>
+      <p id="cats-title" class="cats-title">evey &amp; jasper</p>
+      <p class="cats-sub">the cutest, bestest cats ever 🐱</p>
+      <button type="button" class="btn cats-close-btn" id="cats-close">meow · close</button>
+    </div>
+  </dialog>
+
+  <!-- Unicorn celebration -->
+  <dialog id="unicorn-dialog" class="unicorn-dialog" aria-labelledby="unicorn-title">
+    <div class="unicorn-card">
+      <div class="unicorn-scene" aria-hidden="true">
+        <div class="uni-rainbow-heart" title="rainbow heart"></div>
+        <div class="uni-figure">
+          <div class="uni-mane">
+            <span></span><span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <div class="uni-horn"></div>
+          <div class="uni-ear uni-ear-l"></div>
+          <div class="uni-ear uni-ear-r"></div>
+          <div class="uni-head">
+            <div class="uni-eye"></div>
+            <div class="uni-snout"></div>
+          </div>
+          <div class="uni-body"></div>
+          <div class="uni-leg uni-leg-1"></div>
+          <div class="uni-leg uni-leg-2"></div>
+          <div class="uni-leg uni-leg-3"></div>
+          <div class="uni-leg uni-leg-4"></div>
+          <div class="uni-tail">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+        </div>
+      </div>
+      <p id="unicorn-title" class="unicorn-title">unicorn</p>
+      <p class="unicorn-sub">rainbow mane · sunset vibes</p>
+      <button type="button" class="btn unicorn-close-btn" id="unicorn-close">✨ Close</button>
+    </div>
+  </dialog>
+
+  <!-- Barrel of monkeys -->
+  <dialog id="monkeys-dialog" class="monkeys-dialog" aria-labelledby="monkeys-title">
+    <div class="monkeys-card">
+      <div class="monkeys-rainforest" aria-hidden="true">
+        <div class="rf-canopy"></div>
+        <div class="rf-vines"></div>
+        <div class="rf-floor"></div>
+      </div>
+      <div class="monkeys-stage" id="monkeys-stage">
+        <div class="barrel" aria-hidden="true">
+          <div class="barrel-lid"></div>
+          <div class="barrel-body">
+            <div class="barrel-band"></div>
+            <div class="barrel-band mid"></div>
+            <div class="barrel-band"></div>
+          </div>
+        </div>
+        <div class="monkey-swarm" id="monkey-swarm"></div>
+      </div>
+      <p id="monkeys-title" class="monkeys-title">barrel of monkeys</p>
+      <p class="monkeys-sub">ten little friends · rainforest edition</p>
+      <button type="button" class="btn monkeys-close-btn" id="monkeys-close">Close</button>
+    </div>
+  </dialog>
+
   <script src="midi.js?v=loop-4bars"></script>
-  <script src="app.js?v=layout-transport-1"></script>
+  <script src="app.js?v=kid-time-1"></script>
 </body>
 </html>

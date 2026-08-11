@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 
 from .catalog import CATALOG
 from .export_loop import export_loop
-from .generate import generate_loop, generate_tracks, reroll_slot
+from .generate import catalog_style_suggestions, generate_loop, generate_tracks, reroll_slot
 from .persist import catalog_stats, default_db_path, load_catalog, save_catalog
 from .scanner import DEFAULT_SAMPLE_ROOTS, DEFAULT_SERUM_ROOTS, scan_library
 
@@ -64,7 +64,7 @@ app = FastAPI(title="Reroll", version="0.1.0")
 class GenerateRequest(BaseModel):
     bpm: int = 140
     key: str = "F minor"
-    style: str = "Techno"
+    style: str = ""
     locked: dict[str, dict[str, Any]] = Field(default_factory=dict)
     # role -> s1 | s2 | both  (bass/lead Serum engine filter)
     serum_engines: dict[str, str] = Field(default_factory=dict)
@@ -83,6 +83,8 @@ class RerollRequest(BaseModel):
     serum_type: str = "any"
     filter_risers: bool = False
     filter_factory_serum: bool = False
+    # Empty / none / random → true random pick; otherwise soft pack/path lean
+    style: str = ""
 
 
 class MidiNote(BaseModel):
@@ -124,7 +126,7 @@ class SaveLoopRequest(BaseModel):
     name: str
     bpm: int = 140
     key: str = "F minor"
-    style: str = "Techno"
+    style: str = ""
     options: dict[str, Any] = Field(default_factory=dict)
     track_order: list[str] = Field(default_factory=list)
     slots: dict[str, Any] = Field(default_factory=dict)
@@ -147,7 +149,7 @@ class ExportRequest(BaseModel):
     name: str | None = None
     bpm: float = 140
     key: str = "F minor"
-    style: str = "Techno"
+    style: str = ""
     bars: int = 4
     tracks: list[ExportTrack] = Field(default_factory=list)
     # Default false — UI shows drag tray into the open Live set instead
@@ -168,9 +170,10 @@ class UserSettings(BaseModel):
 
     bpm: int = 140
     key: str = "F minor"
-    style: str = "Techno"
+    style: str = "No preference"
     filterRisers: bool = True
     filterFactorySerum: bool = False
+    kidTime: bool = False
     serum1: bool = True
     serum2: bool = True
     # instrument id → enabled (default track stack)
@@ -232,6 +235,7 @@ def _normalize_settings_dict(data: dict[str, Any], *, source: dict[str, Any] | N
     else:
         base["filterRisers"] = True
     base["filterFactorySerum"] = bool(base.get("filterFactorySerum", False))
+    base["kidTime"] = bool(base.get("kidTime", False))
     base["serum1"] = bool(base.get("serum1", True))
     base["serum2"] = bool(base.get("serum2", True))
     inst = base.get("instruments")
@@ -239,7 +243,7 @@ def _normalize_settings_dict(data: dict[str, Any], *, source: dict[str, Any] | N
         {str(k): bool(v) for k, v in inst.items()} if isinstance(inst, dict) else {}
     )
     base["key"] = str(base.get("key") or "F minor")
-    base["style"] = str(base.get("style") or "Techno")
+    base["style"] = str(base.get("style") if base.get("style") is not None else "No preference")
     base["sampleRoots"] = _normalize_root_list(
         src.get("sampleRoots", base.get("sampleRoots"))
     )
@@ -366,6 +370,8 @@ def library_summary() -> dict[str, Any]:
     summary["extra_serum_roots"] = list(s.get("serumRoots") or [])
     summary["default_sample_roots"] = [str(p) for p in DEFAULT_SAMPLE_ROOTS]
     summary["default_serum_roots"] = [str(p) for p in DEFAULT_SERUM_ROOTS]
+    # Top genres inferred from pack names in *this* library (for Style datalist)
+    summary["styles"] = catalog_style_suggestions(CATALOG, limit=10)
     return summary
 
 
@@ -472,6 +478,7 @@ def api_reroll(body: RerollRequest) -> dict[str, Any]:
         serum_type=body.serum_type or "any",
         filter_risers=bool(body.filter_risers),
         filter_factory_serum=bool(body.filter_factory_serum),
+        style=body.style or "",
     )
 
 

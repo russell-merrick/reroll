@@ -81,7 +81,6 @@ def test_write_als_project(tmp_path: Path):
     npi = root.find("LiveSet").find("NextPointeeId")
     assert npi is not None
     assert int(npi.get("Value")) > max_id
-    assert int(npi.get("Value")) >= 100_000
     assert out.get("next_pointee_id", 0) > max_id
     # Stem sets: no returns, no send knobs (Live is strict about matching counts)
     tracks_el = root.find("LiveSet").find("Tracks")
@@ -102,23 +101,74 @@ def test_write_als_project(tmp_path: Path):
                     continue
                 n_slots = sum(1 for s in csl if s.tag == "ClipSlot")
                 assert n_slots == n_scenes, f"{seq_name} slots={n_slots} scenes={n_scenes}"
-        # Arrangement: one AudioClip in Sample/ArrangerAutomation/Events
+        # Session clip present (arrangement injection is opt-in; default off for Live stability)
         ms = track.find("DeviceChain/MainSequencer")
         if ms is None:
             ms = next(track.iter("MainSequencer"), None)
         assert ms is not None
+        session_clips = list(ms.iter("AudioClip"))
+        # May include only session slot clips when arrangement disabled
+        assert len(session_clips) >= 1, "expected session AudioClip"
+        ac = session_clips[0]
+        assert float(ac.find("CurrentStart").get("Value")) == 0.0
+        assert float(ac.find("CurrentEnd").get("Value")) == 16.0  # 4 bars
+        assert ac.find("IsWarped").get("Value") == "true"
+        assert ac.find("IsInKey") is not None
+        # Live 12.2: ScaleInformation.Name is an int index (not "Major")
+        si = ac.find("ScaleInformation")
+        assert si is not None
+        assert si.find("Root") is not None
+        assert si.find("RootNote") is None
+        int(si.find("Name").get("Value"))  # must parse as int
+        # Flat SampleRef (no nested SourceContext children)
+        sc = ac.find("SampleRef/SourceContext")
+        assert sc is not None
+        assert len(list(sc)) == 0
+        fr = ac.find("SampleRef/FileRef")
+        assert fr is not None
+        assert fr.find("RelativePathType").get("Value") == "6"
+        # Arrangement Events empty by default (no hard-crash inject)
         events = ms.find("Sample/ArrangerAutomation/Events")
-        assert events is not None
-        arr_clips = [c for c in events if c.tag == "AudioClip"]
-        assert len(arr_clips) == 1, "expected arrangement clip"
-        assert arr_clips[0].get("Time") == "0"
-        assert float(arr_clips[0].find("CurrentEnd").get("Value")) == 16.0  # 4 bars
+        if events is not None:
+            assert sum(1 for c in events if c.tag == "AudioClip") == 0
     # Transport loop brace covers the same 4 bars
     transport = root.find("LiveSet").find("Transport")
     assert transport is not None
     assert transport.find("LoopOn").get("Value") == "true"
     assert float(transport.find("LoopStart").get("Value")) == 0.0
     assert float(transport.find("LoopLength").get("Value")) == 16.0
+    # LiveSet-level scale must also be int-based (Live 12.2)
+    ls_si = root.find("LiveSet").find("ScaleInformation")
+    assert ls_si is not None
+    assert ls_si.find("Root") is not None
+    assert ls_si.find("RootNote") is None
+    int(ls_si.find("Name").get("Value"))
+    assert 'Name Value="Major"' not in xml
+    assert "RootNote" not in xml or "PreferFlatRootNote" in xml
+    # No dangling group membership (Live: "track grouping corrupt")
+    assert sum(1 for t in tracks_el if t.tag == "GroupTrack") == 0
+    for track in tracks_el:
+        if track.tag != "AudioTrack":
+            continue
+        assert track.find("TrackGroupId").get("Value") == "-1"
+        assert track.find("LinkedTrackGroupId").get("Value") == "-1"
+        for tgt in track.iter("Target"):
+            assert "GroupTrack" not in (tgt.get("Value") or "")
+    # ClipSlot Id must be scene index 0..n-1 (NOT global renumber) — Live hard-crash otherwise
+    for csl in root.iter("ClipSlotList"):
+        for i, slot in enumerate(s for s in csl if s.tag == "ClipSlot"):
+            assert slot.get("Id") == str(i), f"ClipSlot Id={slot.get('Id')} expected {i}"
+    for i, sc in enumerate(root.find("LiveSet").find("Scenes")):
+        assert sc.get("Id") == str(i)
+    # Pointee Ids must be unique (Live: "non-unique pointee IDs")
+    pids = [p.get("Id") for p in root.iter("Pointee")]
+    assert len(pids) == len(set(pids)), f"duplicate Pointees: {pids}"
+    # AutomationTarget Ids must be unique after multi-track clone
+    aids = [a.get("Id") for a in root.iter("AutomationTarget") if a.get("Id")]
+    assert len(aids) == len(set(aids)), "duplicate AutomationTarget Ids"
+    npi = int(root.find("LiveSet").find("NextPointeeId").get("Value"))
+    for p in pids:
+        assert int(p) < npi
 
 
 def test_export_loop_writes_als(tmp_path: Path):

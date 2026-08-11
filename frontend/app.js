@@ -23,6 +23,8 @@ const state = {
     serumRoots: [],
     /** UI theme: dark | light | neon | rainbow */
     theme: "dark",
+    /** Show fun kid buttons (Sierra, cats, unicorn, monkeys) */
+    kidTime: false,
   },
   /** Last saved loop id (for optional overwrite context) */
   currentLoopId: null,
@@ -825,7 +827,10 @@ function initBottomTips() {
   [
     ["#bpm", "Tempo — changes live while the loop is playing"],
     ["#key", "Key for future MIDI (not used for sample pick yet)"],
-    ["#style", "Style / genre label (not used for pick yet)"],
+    [
+      "#style",
+      "Soft lean for Reroll / dice. Suggestions come from your library packs. “No preference” / empty = true random",
+    ],
   ].forEach(([sel, tip]) => {
     const el = $(sel);
     if (el) el.dataset.tip = tip;
@@ -2544,6 +2549,37 @@ function renderLibrary(summary) {
   if (summary.serum_categories) {
     populateSerumTypeSelects(summary.serum_categories);
   }
+  populateStylePresets(summary.styles);
+}
+
+/**
+ * Fill Style datalist from catalog-inferred genres (top packs in this library).
+ * Always keeps "No preference" first; free text still allowed.
+ */
+function populateStylePresets(styles) {
+  const dl = $("#style-presets");
+  if (!dl) return;
+  const labels = [];
+  if (Array.isArray(styles)) {
+    for (const s of styles) {
+      const label = typeof s === "string" ? s : s?.label;
+      if (label && String(label).trim()) labels.push(String(label).trim());
+    }
+  }
+  dl.innerHTML = "";
+  const add = (value) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    dl.appendChild(opt);
+  };
+  add("No preference");
+  const seen = new Set(["no preference"]);
+  for (const label of labels) {
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    add(label);
+  }
 }
 
 async function loadLibrary() {
@@ -2768,6 +2804,17 @@ function syncFilterFactorySerumUi() {
   if (el) el.checked = Boolean(state.options.filterFactorySerum);
 }
 
+function syncKidTimeUi() {
+  const on = Boolean(state.options.kidTime);
+  const el = $("#opt-kid-time");
+  if (el) el.checked = on;
+  const panel = $("#kid-time-panel");
+  if (panel) {
+    if (on) panel.removeAttribute("hidden");
+    else panel.setAttribute("hidden", "");
+  }
+}
+
 function normalizeTheme(id) {
   const t = String(id || "dark").toLowerCase().trim();
   return THEME_IDS.includes(t) ? t : "dark";
@@ -2802,6 +2849,8 @@ function collectUserSettings() {
   if (filterEl) state.options.filterRisers = Boolean(filterEl.checked);
   const facEl = $("#opt-filter-factory-serum");
   if (facEl) state.options.filterFactorySerum = Boolean(facEl.checked);
+  const kidEl = $("#opt-kid-time");
+  if (kidEl) state.options.kidTime = Boolean(kidEl.checked);
   ensureInstrumentsState();
   readInstrumentsFromDom();
   // Prefer live dialog values when present
@@ -2813,9 +2862,10 @@ function collectUserSettings() {
   return {
     bpm: getBpm(),
     key: $("#key")?.value || "F minor",
-    style: ($("#style")?.value || "Techno").trim() || "Techno",
+    style: ($("#style")?.value || "").trim(),
     filterRisers: Boolean(state.options.filterRisers),
     filterFactorySerum: Boolean(state.options.filterFactorySerum),
+    kidTime: Boolean(state.options.kidTime),
     serum1: state.options.serum1 !== false,
     serum2: state.options.serum2 !== false,
     instruments: { ...state.options.instruments },
@@ -2857,6 +2907,7 @@ function applyUserSettings(s) {
   state.options.serum1 = s.serum1 !== false && s.serum1 !== 0;
   state.options.serum2 = s.serum2 !== false && s.serum2 !== 0;
   state.options.filterFactorySerum = Boolean(s.filterFactorySerum);
+  state.options.kidTime = Boolean(s.kidTime);
   if (s.instruments && typeof s.instruments === "object") {
     state.options.instruments = { ...defaultInstrumentsMap(), ...s.instruments };
   } else {
@@ -2886,6 +2937,7 @@ function applyUserSettings(s) {
   syncFilterFactorySerumUi();
   syncInstrumentCheckboxesUi();
   syncThemeUi();
+  syncKidTimeUi();
 }
 
 let settingsSaveTimer = null;
@@ -2949,7 +3001,8 @@ async function doGenerate(opts = {}) {
   const body = {
     bpm: Number($("#bpm")?.value || 140),
     key: $("#key")?.value || "F minor",
-    style: $("#style")?.value || "Techno",
+    // Empty / None → true random on the backend (no style lean)
+    style: ($("#style")?.value || "").trim(),
     tracks: tracksPayload(),
     filter_risers: getFilterRisers(),
     filter_factory_serum: getFilterFactorySerum(),
@@ -3028,6 +3081,7 @@ async function doReroll(role) {
         serum_type: stype,
         filter_risers: getFilterRisers(),
         filter_factory_serum: getFilterFactorySerum(),
+        style: ($("#style")?.value || "").trim(),
       }),
     });
   } finally {
@@ -4152,7 +4206,7 @@ function captureDocSnapshot() {
     slots,
     bpm: getBpm(),
     key: $("#key")?.value || "F minor",
-    style: $("#style")?.value || "Techno",
+    style: ($("#style")?.value || "").trim(),
   };
 }
 
@@ -4333,7 +4387,7 @@ function serializeLoop(name) {
     name: String(name || "").trim(),
     bpm: getBpm(),
     key: $("#key")?.value || "F minor",
-    style: $("#style")?.value || "Techno",
+    style: ($("#style")?.value || "").trim(),
     options: {
       filterRisers: getFilterRisers(),
       filterFactorySerum: getFilterFactorySerum(),
@@ -4639,6 +4693,14 @@ function initUiChrome() {
     );
     scheduleSaveUserSettings({ immediate: true });
   });
+  $("#opt-kid-time")?.addEventListener("change", (ev) => {
+    state.options.kidTime = Boolean(ev.target.checked);
+    syncKidTimeUi();
+    setStatus(state.options.kidTime ? "Options · kid time ON" : "Options · kid time OFF");
+    scheduleSaveUserSettings({ immediate: true });
+  });
+  // Default: fun buttons hidden until settings load
+  syncKidTimeUi();
   const onSerumOpt = () => {
     readSerumEngineOptionsFromDom();
     const eng = getSerumEngine();
@@ -4695,7 +4757,7 @@ function initUiChrome() {
     togglePlay();
   });
 
-  // Ctrl/Cmd+Z undo · Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z redo
+  // Ctrl/Cmd+Z undo · Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z redo · Ctrl/Cmd+R reroll
   document.addEventListener("keydown", (ev) => {
     const mod = ev.ctrlKey || ev.metaKey;
     if (!mod) return;
@@ -4709,6 +4771,11 @@ function initUiChrome() {
     if (key === "y" || (key === "z" && ev.shiftKey)) {
       ev.preventDefault();
       performRedo();
+      return;
+    }
+    if (key === "r") {
+      ev.preventDefault(); // block browser reload
+      doGenerate().catch((e) => setStatus(`Reroll failed: ${e.message}`));
     }
   });
 
@@ -4717,6 +4784,272 @@ function initUiChrome() {
     openMyLoopsDialog().catch((e) => setStatus(`My Loops failed: ${e.message}`));
   });
   $("#loops-close")?.addEventListener("click", () => $("#loops-dialog")?.close());
+
+  function openSierraPopup() {
+    const dlg = $("#sierra-dialog");
+    const stage = $("#sierra-fireworks");
+    if (!dlg) return;
+    if (stage) {
+      stage.innerHTML = "";
+      const colors = ["#ff4d9a", "#ff8fab", "#e879f9", "#fbbf24", "#67e8f9", "#f472b6", "#fff"];
+      for (let i = 0; i < 14; i++) {
+        const el = document.createElement("span");
+        el.className = "sierra-fw";
+        el.style.left = `${8 + Math.random() * 84}%`;
+        el.style.top = `${10 + Math.random() * 70}%`;
+        el.style.color = colors[i % colors.length];
+        el.style.animationDelay = `${(i * 0.12).toFixed(2)}s`;
+        stage.appendChild(el);
+      }
+    }
+    if (typeof dlg.showModal === "function") dlg.showModal();
+    else dlg.setAttribute("open", "");
+  }
+  $("#btn-sierra")?.addEventListener("click", () => openSierraPopup());
+  $("#sierra-close")?.addEventListener("click", () => $("#sierra-dialog")?.close());
+  $("#sierra-dialog")?.addEventListener("click", (ev) => {
+    if (ev.target === $("#sierra-dialog")) $("#sierra-dialog")?.close();
+  });
+
+  /** Simple synthesized meow (no external audio file). */
+  function playMeow() {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      const ctx = playMeow._ctx || (playMeow._ctx = new AC());
+      if (ctx.state === "suspended") ctx.resume();
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const filter = ctx.createBiquadFilter();
+      osc.type = "sawtooth";
+      // Pitch glide: mid → high → settle (meow-ish contour)
+      osc.frequency.setValueAtTime(420, now);
+      osc.frequency.linearRampToValueAtTime(780, now + 0.12);
+      osc.frequency.exponentialRampToValueAtTime(320, now + 0.38);
+      filter.type = "bandpass";
+      filter.frequency.setValueAtTime(900, now);
+      filter.Q.value = 4;
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.18, now + 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.42);
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.45);
+    } catch {
+      /* ignore audio errors */
+    }
+  }
+
+  function openCatsPopup() {
+    const dlg = $("#cats-dialog");
+    if (!dlg) return;
+    // Restart cat pop animations
+    dlg.querySelectorAll(".cat-face").forEach((face, i) => {
+      face.style.animation = "none";
+      void face.offsetWidth;
+      face.style.animation = "";
+      face.style.animationDelay = i ? "0.08s" : "0s";
+    });
+    playMeow();
+    if (typeof dlg.showModal === "function") dlg.showModal();
+    else dlg.setAttribute("open", "");
+  }
+  $("#btn-cats")?.addEventListener("click", () => openCatsPopup());
+  $("#cats-close")?.addEventListener("click", () => {
+    playMeow();
+    $("#cats-dialog")?.close();
+  });
+  $("#cats-dialog")?.addEventListener("click", (ev) => {
+    if (ev.target === $("#cats-dialog")) $("#cats-dialog")?.close();
+  });
+
+  function openUnicornPopup() {
+    const dlg = $("#unicorn-dialog");
+    if (!dlg) return;
+    const fig = dlg.querySelector(".uni-figure");
+    if (fig) {
+      fig.style.animation = "none";
+      void fig.offsetWidth;
+      fig.style.animation = "";
+    }
+    if (typeof dlg.showModal === "function") dlg.showModal();
+    else dlg.setAttribute("open", "");
+  }
+  $("#btn-unicorn")?.addEventListener("click", () => openUnicornPopup());
+  $("#unicorn-close")?.addEventListener("click", () => $("#unicorn-dialog")?.close());
+  $("#unicorn-dialog")?.addEventListener("click", (ev) => {
+    if (ev.target === $("#unicorn-dialog")) $("#unicorn-dialog")?.close();
+  });
+
+  const MONKEY_COLORS = {
+    1: "purple",
+    2: "red",
+    3: "green",
+    4: "yellow",
+    5: "blue",
+    6: "purple",
+    7: "red",
+    8: "green",
+    9: "yellow",
+    10: "blue",
+  };
+  // Spread monkeys around the barrel (lower = less upward --my)
+  const MONKEY_SLOTS = [
+    { x: -150, y: 8 },
+    { x: -110, y: -12 },
+    { x: -55, y: -22 },
+    { x: 0, y: -28 },
+    { x: 55, y: -22 },
+    { x: 110, y: -12 },
+    { x: 150, y: 8 },
+    { x: -130, y: 28 },
+    { x: 130, y: 28 },
+    { x: 0, y: 12 },
+  ];
+
+  function buildMonkeys() {
+    const swarm = $("#monkey-swarm");
+    if (!swarm) return;
+    swarm.innerHTML = "";
+    for (let n = 1; n <= 10; n++) {
+      const slot = MONKEY_SLOTS[n - 1];
+      const color = MONKEY_COLORS[n];
+      const el = document.createElement("div");
+      el.className = `monkey monkey-${color}`;
+      el.style.setProperty("--mx", `${slot.x}px`);
+      el.style.setProperty("--my", `${slot.y}px`);
+      el.style.animationDelay = `${(n - 1) * 0.07}s`;
+      el.innerHTML = `
+        <div class="monkey-ear l"></div>
+        <div class="monkey-ear r"></div>
+        <div class="monkey-arm l"></div>
+        <div class="monkey-arm r"></div>
+        <div class="monkey-body"></div>
+        <div class="monkey-head">
+          <div class="monkey-face"></div>
+          <div class="monkey-eye l"></div>
+          <div class="monkey-eye r"></div>
+        </div>
+        <div class="monkey-leg l"></div>
+        <div class="monkey-leg r"></div>
+        <span class="monkey-num c-${color}">${n}</span>
+      `;
+      swarm.appendChild(el);
+    }
+  }
+
+  /** Synthesized screechy monkey call (no external audio file). */
+  function playMonkeyOohAhh() {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      const ctx = playMonkeyOohAhh._ctx || (playMonkeyOohAhh._ctx = new AC());
+      if (ctx.state === "suspended") ctx.resume();
+      const now = ctx.currentTime;
+
+      // Harsh high chirps / screeches
+      const phrases = [
+        { t: 0.0, f0: 900, f1: 2200, f2: 1100, dur: 0.12, type: "sawtooth", peak: 0.16 },
+        { t: 0.11, f0: 1100, f1: 2800, f2: 900, dur: 0.14, type: "sawtooth", peak: 0.18 },
+        { t: 0.28, f0: 700, f1: 1900, f2: 600, dur: 0.18, type: "square", peak: 0.1 },
+        { t: 0.48, f0: 1200, f1: 3200, f2: 800, dur: 0.2, type: "sawtooth", peak: 0.15 },
+        { t: 0.72, f0: 800, f1: 2400, f2: 500, dur: 0.22, type: "sawtooth", peak: 0.14 },
+      ];
+
+      for (const p of phrases) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        const filter = ctx.createBiquadFilter();
+        const shaper = ctx.createWaveShaper();
+        // Mild soft-clip for grit
+        const curve = new Float32Array(256);
+        for (let i = 0; i < 256; i++) {
+          const x = (i / 128) - 1;
+          curve[i] = Math.tanh(x * 2.4);
+        }
+        shaper.curve = curve;
+
+        osc.type = p.type;
+        const t0 = now + p.t;
+        osc.frequency.setValueAtTime(p.f0, t0);
+        osc.frequency.linearRampToValueAtTime(p.f1, t0 + p.dur * 0.25);
+        osc.frequency.exponentialRampToValueAtTime(Math.max(120, p.f2), t0 + p.dur);
+
+        // Vibrato / jitter on the screech
+        const lfo = ctx.createOscillator();
+        const lfoGain = ctx.createGain();
+        lfo.type = "sine";
+        lfo.frequency.setValueAtTime(28, t0);
+        lfoGain.gain.setValueAtTime(80, t0);
+        lfo.connect(lfoGain);
+        lfoGain.connect(osc.frequency);
+        lfo.start(t0);
+        lfo.stop(t0 + p.dur + 0.02);
+
+        filter.type = "bandpass";
+        filter.frequency.setValueAtTime(p.f1 * 0.85, t0);
+        filter.frequency.linearRampToValueAtTime(p.f1 * 1.2, t0 + p.dur * 0.4);
+        filter.Q.value = 6;
+        gain.gain.setValueAtTime(0.0001, t0);
+        gain.gain.exponentialRampToValueAtTime(p.peak, t0 + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + p.dur);
+
+        osc.connect(filter);
+        filter.connect(shaper);
+        shaper.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(t0);
+        osc.stop(t0 + p.dur + 0.02);
+      }
+
+      // Brief noise burst for screech texture
+      const nLen = Math.floor(ctx.sampleRate * 0.35);
+      const buf = ctx.createBuffer(1, nLen, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < nLen; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / nLen);
+      const noise = ctx.createBufferSource();
+      noise.buffer = buf;
+      const nFilter = ctx.createBiquadFilter();
+      nFilter.type = "highpass";
+      nFilter.frequency.value = 1800;
+      const nGain = ctx.createGain();
+      nGain.gain.setValueAtTime(0.0001, now);
+      nGain.gain.exponentialRampToValueAtTime(0.08, now + 0.02);
+      nGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+      noise.connect(nFilter);
+      nFilter.connect(nGain);
+      nGain.connect(ctx.destination);
+      noise.start(now);
+      noise.stop(now + 0.36);
+    } catch {
+      /* ignore audio errors */
+    }
+  }
+
+  function openMonkeysPopup() {
+    const dlg = $("#monkeys-dialog");
+    if (!dlg) return;
+    buildMonkeys();
+    playMonkeyOohAhh();
+    if (typeof dlg.showModal === "function") dlg.showModal();
+    else dlg.setAttribute("open", "");
+    // Pop each monkey after layout
+    requestAnimationFrame(() => {
+      $("#monkey-swarm")?.querySelectorAll(".monkey").forEach((m) => {
+        m.classList.remove("pop");
+        void m.offsetWidth;
+        m.classList.add("pop");
+      });
+    });
+  }
+  $("#btn-monkeys")?.addEventListener("click", () => openMonkeysPopup());
+  $("#monkeys-close")?.addEventListener("click", () => $("#monkeys-dialog")?.close());
+  $("#monkeys-dialog")?.addEventListener("click", (ev) => {
+    if (ev.target === $("#monkeys-dialog")) $("#monkeys-dialog")?.close();
+  });
 
   $("#save-cancel")?.addEventListener("click", () => $("#save-dialog")?.close());
   const saveForm = $("#save-form");

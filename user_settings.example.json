@@ -1,9 +1,10 @@
 {
   "bpm": 140,
   "key": "F minor",
-  "style": "Techno",
+  "style": "No preference",
   "filterRisers": true,
   "filterFactorySerum": false,
+  "kidTime": false,
   "serum1": true,
   "serum2": true,
   "instruments": {
