@@ -216,6 +216,7 @@ def export_loop(
                     bpm=bpm,
                     bars=bars,
                     name_blob=f"{display} {src.name}",
+                    key=key,
                 )
                 if rendered.get("ok") and dest.is_file():
                     written.append(dest)

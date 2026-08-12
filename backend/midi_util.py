@@ -26,6 +26,120 @@ def parse_key(key: str) -> tuple[int, str]:
     return root, quality
 
 
+# Splice-style key tokens in sample names: _Fm_, _G#min, _Bm, _C, …
+_NOTE_ROOT: dict[str, int] = {
+    "C": 0,
+    "C#": 1,
+    "DB": 1,
+    "D": 2,
+    "D#": 3,
+    "EB": 3,
+    "E": 4,
+    "F": 5,
+    "F#": 6,
+    "GB": 6,
+    "G": 7,
+    "G#": 8,
+    "AB": 8,
+    "A": 9,
+    "A#": 10,
+    "BB": 10,
+    "B": 11,
+}
+
+# Prefer explicit quality (min/maj); then bare note tokens near end of stem.
+_KEY_WITH_QUAL_RE = re.compile(
+    r"(?:^|[^A-Za-z0-9])"
+    r"([A-G])([#b]|sharp|flat)?"
+    r"[-_\s]?(maj(?:or)?|min(?:or)?|m)"
+    r"(?=[^A-Za-z0-9]|$)",
+    re.I,
+)
+_KEY_BARE_RE = re.compile(
+    r"(?:^|[^A-Za-z0-9])"
+    r"([A-G])([#b]|sharp|flat)?"
+    r"(?=[^A-Za-z0-9]|$)",
+    re.I,
+)
+
+
+def _note_token_to_root(letter: str, acc: str | None) -> int | None:
+    a = (acc or "").lower()
+    if a in ("sharp", "#"):
+        suffix = "#"
+    elif a in ("flat", "b"):
+        suffix = "b"
+    else:
+        suffix = ""
+    key = ((letter or "").upper() + suffix).upper()  # Db → DB, C# → C#
+    return _NOTE_ROOT.get(key)
+
+
+def parse_key_from_name(name: str) -> tuple[int, str] | None:
+    """
+    Detect root key from a sample filename/path label (Splice-style).
+
+    Returns (root_pc 0–11, quality) or None if no reliable key token.
+    Quality is best-effort; many packs only tag the root note.
+    """
+    raw = str(name or "")
+    # Prefer basename — pack folder names often contain stray letters
+    stem = raw.replace("\\", "/").split("/")[-1]
+    stem = re.sub(r"\.(wav|aif|aiff|flac|mp3|ogg)$", "", stem, flags=re.I)
+
+    def _from_parts(letter: str, acc: str | None, qual_raw: str) -> tuple[int, str] | None:
+        root = _note_token_to_root(letter, acc)
+        if root is None:
+            return None
+        q = (qual_raw or "").lower()
+        if q in ("maj", "major"):
+            quality = "major"
+        elif q in ("min", "minor", "m"):
+            quality = "minor"
+        else:
+            quality = "minor"  # default label; transpose uses root only
+        return root, quality
+
+    with_qual = list(_KEY_WITH_QUAL_RE.finditer(stem))
+    if with_qual:
+        m = with_qual[-1]
+        parsed = _from_parts(m.group(1), m.group(2), m.group(3) or "")
+        if parsed:
+            return parsed
+
+    bare = list(_KEY_BARE_RE.finditer(stem))
+    if not bare:
+        return None
+    # Prefer last token (packs put key near the end)
+    m = bare[-1]
+    return _from_parts(m.group(1), m.group(2), "")
+
+
+def semitones_between_roots(from_root: int, to_root: int) -> int:
+    """Shortest signed semitone distance in (-6, +6]."""
+    d = (int(to_root) - int(from_root)) % 12
+    if d > 6:
+        d -= 12
+    return d
+
+
+def transpose_semitones_from_name(name: str, session_key: str) -> int | None:
+    """
+    Semitones to shift a sample so its labeled root matches session_key root.
+    None if the filename has no parseable key.
+    """
+    detected = parse_key_from_name(name)
+    if not detected:
+        return None
+    src_root, _ = detected
+    dst_root, _ = parse_key(session_key)
+    return semitones_between_roots(src_root, dst_root)
+
+
+def pitch_ratio_from_semitones(semitones: float) -> float:
+    return float(2.0 ** (float(semitones) / 12.0))
+
+
 def degree_to_midi(key: str, degree: int, octave: int = 3) -> int:
     root, quality = parse_key(key)
     ints = MAJOR if quality == "major" else MINOR

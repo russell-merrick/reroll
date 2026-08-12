@@ -13,6 +13,7 @@
     "clap": true,
     "lead_audio": true,
     "bass": true,
+    "bass_audio": false,
     "brass": false,
     "chorus": false,
     "pads": false,

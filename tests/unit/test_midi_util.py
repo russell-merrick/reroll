@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backend.midi_util import degree_to_midi, grid_to_notes, write_midi_file
+from backend.midi_util import (
+    degree_to_midi,
+    grid_to_notes,
+    parse_key_from_name,
+    transpose_semitones_from_name,
+    write_midi_file,
+)
 
 
 def test_degree_to_midi_f_minor_root():
@@ -32,3 +38,41 @@ def test_write_midi_file(tmp_path: Path):
     write_midi_file(dest, notes, bpm=140, track_name="test")
     assert dest.is_file()
     assert dest.stat().st_size > 20
+
+
+def test_parse_key_from_name_splice_styles():
+    cases = [
+        ("KMRBI_BP_130_synth_lead_loop_phoney_Bm.wav", 11, "minor"),  # B
+        ("BOS_EN_150_Synth_Lead_Loop_Supersonic_Dm.wav", 2, "minor"),  # D
+        ("DS_HT_152_synth_lead_dark_main_F#min.wav", 6, "minor"),
+        ("019_Short_Synth_Loop_138bpm_G#_-_138BPMT_Zenhiser.wav", 8, "minor"),
+        ("808_oneshot_subby_pop_C.wav", 0, "minor"),
+        ("FO4_DHT_140_synth_noise_G#maj.wav", 8, "major"),
+        ("ESM_CR_126_fx_synth_loop_future_rave_old_dance_vibe_g#m.wav", 8, "minor"),
+        ("PLX_ATT_140_kit_rise_chord_Emin.wav", 4, "minor"),
+    ]
+    for name, root, quality in cases:
+        got = parse_key_from_name(name)
+        assert got is not None, name
+        assert got[0] == root, (name, got)
+        assert got[1] == quality, (name, got)
+
+
+def test_parse_key_from_name_no_false_positive():
+    assert parse_key_from_name("MARS_808_clap_gated.wav") is None
+    assert parse_key_from_name("plain_kick_oneshot.wav") is None
+
+
+def test_transpose_semitones_from_name():
+    # Bm (B=11) → F minor (F=5): shortest is +6 (tritone)
+    assert transpose_semitones_from_name(
+        "KMRBI_BP_130_synth_lead_loop_phoney_Bm.wav", "F minor"
+    ) == 6
+    # Dm (D=2) → F minor (F=5): +3
+    assert transpose_semitones_from_name(
+        "BOS_EN_150_Synth_Lead_Loop_Supersonic_Dm.wav", "F minor"
+    ) == 3
+    # Already F minor root
+    assert transpose_semitones_from_name("lead_loop_Fm_128.wav", "F minor") == 0
+    # No key tag
+    assert transpose_semitones_from_name("kick_oneshot.wav", "F minor") is None

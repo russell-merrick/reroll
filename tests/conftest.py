@@ -62,6 +62,12 @@ def sample_catalog() -> Catalog:
             pack="PackA",
             name="lead_stab.wav",
         ),
+        make_asset(
+            path=r"C:\lib\bass\bass_loop_C.wav",
+            role="bass",
+            pack="PackA",
+            name="bass_loop_C.wav",
+        ),
     ]
     c.serum = [
         make_asset(

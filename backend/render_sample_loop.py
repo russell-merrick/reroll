@@ -15,7 +15,24 @@ from typing import Any
 
 import numpy as np
 
+from .midi_util import pitch_ratio_from_semitones, transpose_semitones_from_name
 from .timing import LOOP_BARS, cycle_sec, sec_per_16th
+
+# Sample track types where filename key → session-key pitch shift makes sense
+_KEY_TRANSPOSE_TYPES = frozenset(
+    {
+        "lead_audio",
+        "bass_audio",
+        "bass",
+        "lead",
+        "synth",
+        "pad",
+        "keys",
+        "pluck",
+        "guitar",
+        "loop",
+    }
+)
 
 # Match frontend app.js PATTERNS / SLOT_GAIN (1 bar of 16ths, repeated)
 PATTERNS: dict[str, list[int]] = {
@@ -26,6 +43,7 @@ PATTERNS: dict[str, list[int]] = {
     "perc": [0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0],
     "fx": [0] * 16,
     "lead_audio": [1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    "bass_audio": [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
     "vocal": [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 }
 
@@ -38,6 +56,7 @@ SLOT_GAIN: dict[str, float] = {
     "fx": 0.5,
     "vocal": 0.55,
     "lead_audio": 0.55,
+    "bass_audio": 0.7,
     "loop": 0.6,
 }
 
@@ -226,6 +245,18 @@ def _phrase_rate(duration_sec: float, name: str, bpm: float, bars: int) -> float
     return max(0.25, min(4.0, duration_sec / target)) if target > 0 else 1.0
 
 
+def _key_pitch_ratio(name: str, track_type: str, session_key: str | None) -> tuple[float, int | None]:
+    """Playback-rate multiplier for filename key → session key (1.0 if N/A)."""
+    if not session_key or track_type not in _KEY_TRANSPOSE_TYPES:
+        return 1.0, None
+    semis = transpose_semitones_from_name(name, session_key)
+    if semis is None or semis == 0:
+        return 1.0, semis
+    # Cap extreme jumps (pack mis-tags) at ±7
+    semis = max(-7, min(7, int(semis)))
+    return pitch_ratio_from_semitones(semis), semis
+
+
 def render_sample_loop(
     sample_path: Path | str,
     dest_path: Path | str,
@@ -234,9 +265,14 @@ def render_sample_loop(
     bpm: float = 140,
     bars: int = LOOP_BARS,
     name_blob: str | None = None,
+    key: str | None = None,
 ) -> dict[str, Any]:
     """
     Render one sample track as a full-loop stereo/mono WAV at TARGET_SR.
+
+    When `key` is set and the sample name tags a musical key (and track is
+    melodic: lead_audio / bass / …), pitch-shift via resample so the root
+    matches the session key (same cheap coupling as BPM warp).
 
     Returns dict with ok, path, duration_sec, mode (pattern|phrase|once), error?
     """
@@ -268,10 +304,12 @@ def render_sample_loop(
     phrase = is_phrase_sample(dur, blob, ttype, bpm=bpm)
     gain = float(SLOT_GAIN.get(ttype, 0.7))
     mode = "pattern"
+    pitch_r, pitch_semis = _key_pitch_ratio(blob, ttype, key)
 
     if phrase:
         mode = "phrase"
-        rate = _phrase_rate(dur, blob, bpm, bars)
+        rate = _phrase_rate(dur, blob, bpm, bars) * pitch_r
+        rate = max(0.25, min(4.0, rate))
         bed = _time_stretch(audio, rate)
         # Loop-fill the full cycle
         if bed.shape[0] == 0:
@@ -284,8 +322,9 @@ def render_sample_loop(
         pat = PATTERNS.get(ttype)
         sp = sec_per_16th(bpm)
         native = parse_bpm_from_name(blob)
-        rate = max(0.25, min(4.0, bpm / native)) if native else 1.0
-        hit = _time_stretch(audio, rate) if rate != 1.0 else audio
+        rate = (float(bpm) / native if native else 1.0) * pitch_r
+        rate = max(0.25, min(4.0, rate))
+        hit = _time_stretch(audio, rate) if abs(rate - 1.0) >= 1e-4 else audio
 
         if ttype in ("fx", "vocal"):
             mode = "once"
@@ -320,4 +359,5 @@ def render_sample_loop(
         "bars": bars,
         "bpm": bpm,
         "sample_rate": TARGET_SR,
+        "pitch_semitones": pitch_semis,
     }

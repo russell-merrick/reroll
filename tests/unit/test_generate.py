@@ -22,6 +22,7 @@ from tests.conftest import make_asset
 def test_slot_kinds():
     assert get_slot_kind("kick") == "sample"
     assert get_slot_kind("lead_audio") == "sample"
+    assert get_slot_kind("bass_audio") == "sample"
     assert get_slot_kind("bass") == "serum"
     assert get_slot_kind("brass") == "serum"
     assert get_slot_kind("vocal") == "sample"
@@ -117,6 +118,19 @@ def test_lead_audio_picks_sample_when_available(sample_catalog: Catalog):
     assert a is not None
     assert a.kind == "sample"
     assert a.role == "lead"
+
+
+def test_bass_audio_never_returns_serum(sample_catalog: Catalog):
+    sample_catalog.samples = [a for a in sample_catalog.samples if a.role != "bass"]
+    a = pick_asset(sample_catalog, "bass_audio", serum_engine="both")
+    assert a is None
+
+
+def test_bass_audio_picks_sample_when_available(sample_catalog: Catalog):
+    a = pick_asset(sample_catalog, "bass_audio")
+    assert a is not None
+    assert a.kind == "sample"
+    assert a.role == "bass"
 
 
 def test_reroll_excludes_current_path(sample_catalog: Catalog):

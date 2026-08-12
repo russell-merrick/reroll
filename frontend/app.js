@@ -56,6 +56,13 @@ const INSTRUMENT_DEFS = [
     defaultOn: true,
     tip: "Serum bass presets + MIDI",
   },
+  {
+    id: "bass_audio",
+    label: "Bass (audio)",
+    type: "bass_audio",
+    defaultOn: false,
+    tip: "Bass / sub audio samples (not Serum)",
+  },
   { id: "brass", label: "Brass", type: "brass", defaultOn: false, tip: "Serum brass" },
   { id: "chorus", label: "Chorus", type: "chorus", defaultOn: false, tip: "Serum chords / chorus-like" },
   { id: "pads", label: "Pads", type: "pad", defaultOn: false, tip: "Serum pads" },
@@ -112,10 +119,11 @@ const SAMPLE_TYPES = new Set([
   "vocal",
   "loop",
   "lead_audio",
+  "bass_audio",
 ]);
 
 /** @deprecated use activeTrackIds() */
-const ALL_ROLES = ["kick", "clap", "hats", "bass", "lead_audio"];
+const ALL_ROLES = ["kick", "clap", "hats", "bass", "lead_audio", "bass_audio"];
 
 let trackSeq = 0;
 
@@ -216,6 +224,7 @@ const PATTERNS = {
   fx: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // one-shot at start if present
   // One-shots / stabs — long loops use phrase beds instead
   lead_audio: [1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+  bass_audio: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
   vocal: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 };
 
@@ -227,6 +236,7 @@ const SLOT_GAIN = {
   fx: 0.5,
   vocal: 0.55,
   lead_audio: 0.55,
+  bass_audio: 0.7,
   bass: 0.7,
   lead: 0.6,
   brass: 0.55,
@@ -826,7 +836,10 @@ function initBottomTips() {
   // Static session field tips
   [
     ["#bpm", "Tempo — changes live while the loop is playing"],
-    ["#key", "Key for future MIDI (not used for sample pick yet)"],
+    [
+      "#key",
+      "Session key — MIDI notes + lead/bass samples (when the filename tags a key like _Fm_)",
+    ],
     [
       "#style",
       "Soft lean for Reroll / dice. Suggestions come from your library packs. “No preference” / empty = true random",
@@ -1100,17 +1113,131 @@ function isPhraseSample(buffer, name = "", type = null) {
   return buffer.duration > Math.max(1.0, barSec * 0.55);
 }
 
+/** Melodic sample types: filename key → session key pitch shift. */
+const KEY_TRANSPOSE_TYPES = new Set([
+  "lead_audio",
+  "bass_audio",
+  "bass",
+  "lead",
+  "synth",
+  "pad",
+  "keys",
+  "pluck",
+  "guitar",
+  "loop",
+]);
+
+/**
+ * True for sample tracks where key-from-name transpose should apply
+ * (lead/bass audio, sample beds — not drums, not Serum).
+ */
+function isMusicalSampleTrack(role) {
+  const s = state.slots[role];
+  if (!s) return false;
+  if (serumStemRoles[role]) return false;
+  if (s.kind === "serum") return false;
+  const path = String(s.path || "");
+  if (/\.(fxp|serumpreset)$/i.test(path)) return false;
+  const t = baseType(role);
+  if (!KEY_TRANSPOSE_TYPES.has(t)) return false;
+  if (t === "lead_audio" || t === "bass_audio") return true;
+  if (s.kind === "sample") return true;
+  return /\.(wav|aif|aiff|flac|mp3)$/i.test(path);
+}
+
+/**
+ * Parse musical key root from Splice-style sample names.
+ * e.g. …_Fm_, …_G#min, …_Bm, …_C → { root: 0–11, quality, label } | null
+ */
+function parseKeyFromName(name) {
+  const raw = String(name || "");
+  let stem = raw.replace(/\\/g, "/").split("/").pop() || raw;
+  stem = stem.replace(/\.(wav|aif|aiff|flac|mp3|ogg)$/i, "");
+
+  const flatMap = { Db: "C#", Eb: "D#", Gb: "F#", Ab: "G#", Bb: "A#" };
+  const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+  function fromParts(letter, acc, qualRaw) {
+    let a = (acc || "").toLowerCase();
+    if (a === "sharp") a = "#";
+    if (a === "flat") a = "b";
+    let n = (letter || "").toUpperCase() + a;
+    if (n.length > 1 && n[1] === "B") n = n[0] + "b";
+    if (flatMap[n]) n = flatMap[n];
+    const root = noteNames.indexOf(n);
+    if (root < 0) return null;
+    let q = (qualRaw || "").toLowerCase();
+    if (q === "maj" || q === "major") q = "major";
+    else if (q === "min" || q === "minor" || q === "m") q = "minor";
+    else q = "minor";
+    return { root, quality: q, label: `${noteNames[root]} ${q}` };
+  }
+
+  const qualRe =
+    /(?:^|[^A-Za-z0-9])([A-G])([#b]|sharp|flat)?[-_\s]?(maj(?:or)?|min(?:or)?|m)(?=[^A-Za-z0-9]|$)/gi;
+  let m;
+  let lastQual = null;
+  while ((m = qualRe.exec(stem)) !== null) lastQual = m;
+  if (lastQual) {
+    const parsed = fromParts(lastQual[1], lastQual[2], lastQual[3]);
+    if (parsed) return parsed;
+  }
+
+  const bareRe =
+    /(?:^|[^A-Za-z0-9])([A-G])([#b]|sharp|flat)?(?=[^A-Za-z0-9]|$)/gi;
+  let lastBare = null;
+  while ((m = bareRe.exec(stem)) !== null) lastBare = m;
+  if (!lastBare) return null;
+  return fromParts(lastBare[1], lastBare[2], "");
+}
+
+/** Shortest signed semitone distance in (-6, +6]. */
+function semitonesBetweenRoots(fromRoot, toRoot) {
+  let d = (((Number(toRoot) - Number(fromRoot)) % 12) + 12) % 12;
+  if (d > 6) d -= 12;
+  return d;
+}
+
+/**
+ * Semitones to shift sample → session key (null if no key tag / not melodic).
+ * @param {string} nameBlob
+ * @param {string | null} role required — only musical sample tracks transpose
+ */
+function sampleKeyTransposeSemitones(nameBlob, role = null) {
+  if (role == null || !isMusicalSampleTrack(role)) return null;
+  const detected = parseKeyFromName(nameBlob);
+  if (!detected) return null;
+  const session = MidiEngine.parseKey($("#key")?.value || "F minor");
+  let semis = semitonesBetweenRoots(detected.root, session.root);
+  if (semis === 0) return 0;
+  // Cap mis-tags
+  if (semis > 7) semis = 7;
+  if (semis < -7) semis = -7;
+  return semis;
+}
+
+function pitchRatioFromSemitones(semis) {
+  if (semis == null || !Number.isFinite(semis) || semis === 0) return 1;
+  return Math.pow(2, semis / 12);
+}
+
 /**
  * BPM warp for any sample hit (one-shot or cycle trigger).
  * Only applies when a native BPM is tagged — never stretch pure one-shots by duration.
+ * Melodic samples also multiply in key transpose from filename.
  */
 function sampleBpmWarpOpts(role, buffer) {
   const blob = sampleNameBlob(role);
   const native = parseBpmFromName(blob);
-  if (!native) return {};
+  const semis = sampleKeyTransposeSemitones(blob, role);
+  const pitchR = pitchRatioFromSemitones(semis);
+  let rate = native ? getBpm() / native : 1;
+  rate *= pitchR;
+  if (!native && (semis == null || semis === 0)) return {};
   return {
-    playbackRate: Math.max(0.25, Math.min(4, getBpm() / native)),
+    playbackRate: Math.max(0.25, Math.min(4, rate)),
     nativeBpm: native,
+    pitchSemitones: semis,
   };
 }
 
@@ -1140,31 +1267,39 @@ function parseBpmFromName(name) {
 }
 
 /**
- * playbackRate so a loop matches session BPM.
+ * playbackRate so a loop matches session BPM (+ key transpose for melodic samples).
  * 1) Prefer BPM tag in name/path
  * 2) Else stretch so buffer duration ≈ nearest whole bars (keeps hats on the kick grid)
+ * 3) Melodic samples: multiply by 2^(semitones/12) from filename key → session key
  */
 function phrasePlaybackFor(buffer, roleOrName) {
   const blob = sampleNameBlob(roleOrName);
   const native = parseBpmFromName(blob);
   const session = getBpm();
+  const role =
+    roleOrName && state.slots[roleOrName] ? roleOrName : null;
+  const semis = sampleKeyTransposeSemitones(blob, role);
+  const pitchR = pitchRatioFromSemitones(semis);
+  let rate;
   if (native) {
-    return {
-      rate: Math.max(0.25, Math.min(4, session / native)),
-      nativeBpm: native,
-    };
+    rate = session / native;
+  } else if (!buffer || !(buffer.duration > 0.05)) {
+    rate = 1;
+  } else {
+    const barSec = secPer16th() * 16;
+    // Nearest 1..LOOP_BARS bars of wall-clock at session tempo
+    let bars = Math.round(buffer.duration / barSec);
+    if (!Number.isFinite(bars) || bars < 1) bars = 1;
+    if (bars > LOOP_BARS) bars = LOOP_BARS;
+    const targetSec = bars * barSec;
+    rate = buffer.duration / targetSec;
   }
-  if (!buffer || !(buffer.duration > 0.05)) {
-    return { rate: 1, nativeBpm: null };
-  }
-  const barSec = secPer16th() * 16;
-  // Nearest 1..LOOP_BARS bars of wall-clock at session tempo
-  let bars = Math.round(buffer.duration / barSec);
-  if (!Number.isFinite(bars) || bars < 1) bars = 1;
-  if (bars > LOOP_BARS) bars = LOOP_BARS;
-  const targetSec = bars * barSec;
-  const rate = Math.max(0.25, Math.min(4, buffer.duration / targetSec));
-  return { rate, nativeBpm: null };
+  rate *= pitchR;
+  return {
+    rate: Math.max(0.25, Math.min(4, rate)),
+    nativeBpm: native || null,
+    pitchSemitones: semis,
+  };
 }
 
 /** @deprecated use phrasePlaybackFor */
@@ -1180,7 +1315,7 @@ function warpRateForName(name) {
  * @param {number} when
  * @param {number} gainValue
  * @param {string | null} role  if set, route through live-muteable track bus
- * @param {{ loop?: boolean, stopAt?: number, playbackRate?: number, nativeBpm?: number|null, offsetSec?: number, durationSec?: number }} [opts]
+ * @param {{ loop?: boolean, stopAt?: number, playbackRate?: number, nativeBpm?: number|null, pitchSemitones?: number|null, offsetSec?: number, durationSec?: number }} [opts]
  */
 function scheduleBuffer(buffer, when, gainValue = 1, role = null, opts = {}) {
   if (!audioCtx || !buffer) return;
@@ -1249,6 +1384,7 @@ function scheduleBuffer(buffer, when, gainValue = 1, role = null, opts = {}) {
     gain,
     role,
     nativeBpm: opts.nativeBpm != null ? opts.nativeBpm : null,
+    pitchSemitones: opts.pitchSemitones != null ? opts.pitchSemitones : null,
   });
   src.onended = () => {
     activeSources = activeSources.filter((s) => s.src !== src);
@@ -1376,11 +1512,12 @@ async function previewSlot(role) {
     ensureTrackGain(role);
     applyTrackMute(role);
     {
-      const { rate, nativeBpm } = phrasePlaybackFor(buf, role);
+      const { rate, nativeBpm, pitchSemitones } = phrasePlaybackFor(buf, role);
       scheduleBuffer(buf, audioCtx.currentTime + 0.02, SLOT_GAIN[role] ?? 0.8, role, {
         loop: true,
         playbackRate: rate,
         nativeBpm,
+        pitchSemitones,
       });
     }
     syncPreviewBtn(role);
@@ -1710,11 +1847,12 @@ function schedulePhraseBedsAt(when, opts = {}) {
     if (cutPrevious) stopSourcesForRole(role);
     const t = baseType(role);
     const g = SLOT_GAIN[t] ?? SLOT_GAIN[role] ?? 0.7;
-    const { rate, nativeBpm } = phrasePlaybackFor(buffer, role);
+    const { rate, nativeBpm, pitchSemitones } = phrasePlaybackFor(buffer, role);
     scheduleBuffer(buffer, when, g, role, {
       loop: true,
       playbackRate: rate,
       nativeBpm,
+      pitchSemitones,
     });
   }
 }
@@ -1724,7 +1862,7 @@ function startPhraseBeds(t0) {
   schedulePhraseBedsAt(t0, { cutPrevious: false });
 }
 
-/** Update warp rates when session BPM changes mid-play. */
+/** Update warp rates when session BPM or key changes mid-play. */
 function retuneWarpedSources() {
   if (!audioCtx || !isPlaying) return;
   const now = audioCtx.currentTime;
@@ -1734,6 +1872,14 @@ function retuneWarpedSources() {
     if (entry.role && scheduler.phraseRoles[entry.role] && !serumStemRoles[entry.role]) {
       const buf = scheduler.buffers[entry.role];
       if (buf) rate = phrasePlaybackFor(buf, entry.role).rate;
+    } else if (entry.role && (entry.nativeBpm || entry.pitchSemitones != null)) {
+      // One-shots / non-phrase: recompute BPM × key rate
+      const blob = sampleNameBlob(entry.role);
+      const native = parseBpmFromName(blob);
+      const semis = sampleKeyTransposeSemitones(blob, entry.role);
+      let r = native ? getBpm() / native : 1;
+      r *= pitchRatioFromSemitones(semis);
+      rate = Math.max(0.25, Math.min(4, r));
     } else if (entry.nativeBpm) {
       rate = Math.max(0.25, Math.min(4, getBpm() / entry.nativeBpm));
     }
@@ -2015,12 +2161,13 @@ async function refreshPlayingTrack(role, opts = {}) {
       scheduler.phraseRoles[role] = true;
       // Kick-lock on next cycle boundary (avoid mid-bar free-run drift)
       const g = SLOT_GAIN[t] ?? 0.7;
-      const { rate, nativeBpm } = phrasePlaybackFor(buf, role);
+      const { rate, nativeBpm, pitchSemitones } = phrasePlaybackFor(buf, role);
       // Immediate preview, then cycle re-lock keeps phase with kick
       scheduleBuffer(buf, audioCtx.currentTime + 0.02, g, role, {
         loop: true,
         playbackRate: rate,
         nativeBpm,
+        pitchSemitones,
       });
     } else {
       delete scheduler.phraseRoles[role];
@@ -3490,7 +3637,8 @@ function renderMacroSliders(role) {
   const meta = Array.isArray(ed.draft.macroMeta) ? ed.draft.macroMeta : [];
   const vals = ed.draft.macros || [0, 0, 0, 0];
   grid.innerHTML = "";
-  grid.style.setProperty("--macro-cols", String(Math.max(1, meta.length)));
+  // Cap at 4 cols so 5–8 macros wrap to a second row (labels stay readable)
+  grid.style.setProperty("--macro-cols", String(Math.min(4, Math.max(1, meta.length))));
 
   if (!meta.length) {
     wrap?.classList.add("is-empty");
@@ -3875,6 +4023,8 @@ function initMidiEditorUi() {
     for (const role of Object.keys(midiEditors)) {
       renderMidiEditor(role);
     }
+    // Lead/bass samples tagged with a key retune to the new session root
+    if (isPlaying) retuneWarpedSources();
   });
 }
 
@@ -3932,6 +4082,7 @@ function buildSlotElement(id, type) {
     fx: "FX",
     vocal: "VOCAL",
     lead_audio: "LEAD",
+    bass_audio: "BASS",
     loop: "LOOP",
     snare: "SNARE",
   };
@@ -4033,7 +4184,9 @@ function addTrack(type, { silent = false } = {}) {
       ? `Serum · ${t}`
       : t === "lead_audio"
         ? "Lead sample"
-        : "— empty —",
+        : t === "bass_audio"
+          ? "Bass sample"
+          : "— empty —",
     meta: isSerumType(t)
       ? "preset · MIDI will follow key"
       : "pick with Reroll / dice",

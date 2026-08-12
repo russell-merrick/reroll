@@ -81,15 +81,17 @@
           <button type="button" class="btn ghost" id="btn-options-close" data-tip="Hide options">Close</button>
         </div>
         <div class="options-group">
-          <div class="options-group-title" data-tip="Visual look of the app">Appearance</div>
-          <div class="options-theme-row" data-tip="Color theme for the whole UI">
-            <span class="options-label"><strong>Theme</strong></span>
-            <select id="opt-theme" class="options-theme-select" aria-label="Theme">
-              <option value="dark">Dark</option>
-              <option value="light">Light</option>
-              <option value="neon">Neon</option>
-              <option value="rainbow">Rainbow</option>
-            </select>
+          <div class="options-group-title" data-tip="Sample &amp; Serum folders on disk">Library</div>
+          <div class="options-lib-stats lib-stats" aria-label="Library counts">
+            <div><strong id="stat-samples">—</strong><span>samples</span></div>
+            <div><strong id="stat-serum">—</strong><span>Serum</span></div>
+            <div><strong id="stat-packs">—</strong><span>packs</span></div>
+          </div>
+          <ul class="role-counts" id="role-counts"></ul>
+          <div class="lib-roots" id="lib-roots" hidden aria-hidden="true"></div>
+          <div class="options-lib-actions">
+            <button type="button" class="btn ghost wide" id="btn-library" data-tip="Edit sample &amp; Serum roots, then rescan">📁 Library roots…</button>
+            <button type="button" class="btn ghost wide" id="btn-rescan" data-tip="Re-walk sample &amp; Serum folders and refresh library.db">Rescan</button>
           </div>
         </div>
         <div class="options-group">
@@ -120,17 +122,15 @@
           <span class="options-label"><strong>Kid time</strong></span>
         </label>
         <div class="options-group">
-          <div class="options-group-title" data-tip="Sample &amp; Serum folders on disk">Library</div>
-          <div class="options-lib-stats lib-stats" aria-label="Library counts">
-            <div><strong id="stat-samples">—</strong><span>samples</span></div>
-            <div><strong id="stat-serum">—</strong><span>Serum</span></div>
-            <div><strong id="stat-packs">—</strong><span>packs</span></div>
-          </div>
-          <ul class="role-counts" id="role-counts"></ul>
-          <div class="lib-roots" id="lib-roots" hidden aria-hidden="true"></div>
-          <div class="options-lib-actions">
-            <button type="button" class="btn ghost wide" id="btn-library" data-tip="Edit sample &amp; Serum roots, then rescan">📁 Library roots…</button>
-            <button type="button" class="btn ghost wide" id="btn-rescan" data-tip="Re-walk sample &amp; Serum folders and refresh library.db">Rescan</button>
+          <div class="options-group-title" data-tip="Visual look of the app">Appearance</div>
+          <div class="options-theme-row" data-tip="Color theme for the whole UI">
+            <span class="options-label"><strong>Theme</strong></span>
+            <select id="opt-theme" class="options-theme-select" aria-label="Theme">
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+              <option value="neon">Neon</option>
+              <option value="rainbow">Rainbow</option>
+            </select>
           </div>
         </div>
       </section>
@@ -157,6 +157,7 @@
             <option value="fx">FX</option>
             <option value="vocal">Vocals</option>
             <option value="lead_audio">Lead (audio)</option>
+            <option value="bass_audio">Bass (audio)</option>
             <option value="bass" selected>Bass (Serum)</option>
             <option value="lead">Lead (Serum)</option>
             <option value="brass">Brass (Serum)</option>

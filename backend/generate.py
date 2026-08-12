@@ -43,6 +43,8 @@ SLOT_ROLES: dict[str, list[str]] = {
     "lead": ["lead", "synth", "pad"],
     # Sample-based lead (Options: Lead audio) — not Serum
     "lead_audio": ["lead", "synth", "pad", "loop"],
+    # Sample-based bass (Options: Bass audio) — not Serum
+    "bass_audio": ["bass"],
     "fx": ["fx"],
     "vocal": ["vocal"],
     "brass": ["brass", "synth"],
@@ -64,6 +66,7 @@ SLOT_KIND: dict[str, str | None] = {
     "bass": "serum",
     "lead": "serum",
     "lead_audio": "sample",
+    "bass_audio": "sample",
     "fx": "sample",
     "vocal": "sample",
     "brass": "serum",
@@ -86,6 +89,7 @@ SAMPLE_SLOT_TYPES = frozenset(
         "vocal",
         "loop",
         "lead_audio",
+        "bass_audio",
     }
 )
 
@@ -145,11 +149,12 @@ def _pool_for_slot(
     if not pool and kind == "serum":
         # Fall back to samples for that role
         pool = collect("sample")
-    # Lead (audio) stays sample-only — never fall back to Serum presets
-    if not pool and kind == "sample" and slot not in ("lead_audio",):
+    # Lead/bass (audio) stay sample-only — never fall back to Serum presets
+    sample_only = slot in ("lead_audio", "bass_audio")
+    if not pool and kind == "sample" and not sample_only:
         pool = collect("serum")
-    if not pool:
-        # Last resort: any sample matching role names in path
+    if not pool and not sample_only:
+        # Last resort: any asset matching role (serum + sample)
         pool = collect(None)
     # Prefer one-shots over loops for drum slots
     if slot in ("kick", "clap", "perc") and pool:
@@ -315,6 +320,7 @@ _STYLE_ROLE_STRENGTH: dict[str, float] = {
     "loop": 0.55,
     "vocal": 0.75,
     "lead_audio": 0.85,
+    "bass_audio": 0.9,
     "bass": 1.0,
     "lead": 1.0,
     "pad": 1.0,
