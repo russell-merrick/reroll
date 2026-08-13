@@ -180,6 +180,65 @@ def grid_to_notes(
     return notes
 
 
+BAR_BEATS = 4.0
+
+
+def _note_tile_sig(note: dict[str, Any]) -> tuple[int, float, float, int]:
+    start = float(note.get("start_beat") or 0.0)
+    return (
+        int(note["midi"]),
+        round(start % BAR_BEATS, 5),
+        round(float(note.get("duration_beats") or 0.0), 5),
+        int(note.get("velocity", note.get("vel", 100))),
+    )
+
+
+def collapse_tiled_bar_notes(
+    notes: list[dict[str, Any]] | None,
+    bars: int,
+    *,
+    bar_beats: float = BAR_BEATS,
+) -> list[dict[str, Any]] | None:
+    """
+    If `notes` is a 1-bar phrase repeated `bars` times, return the first bar.
+
+    Used so Serum only bounces 1 bar (then the audio is tiled). Returns None
+    when the phrase is not periodic — e.g. a 4-bar chord cycle — so the caller
+    must render the full length.
+    """
+    n_bars = max(1, int(bars))
+    if n_bars <= 1 or not notes:
+        return None
+    first = [n for n in notes if float(n.get("start_beat") or 0.0) < bar_beats - 1e-6]
+    if not first:
+        return None
+    # A note that rings across the bar line would be cut by a 1-bar bounce.
+    slop = bar_beats / 16.0
+    for n in first:
+        start = float(n.get("start_beat") or 0.0)
+        dur = float(n.get("duration_beats") or 0.0)
+        if start + dur > bar_beats + slop:
+            return None
+    first_counts: dict[tuple[int, float, float, int], int] = {}
+    for n in first:
+        sig = _note_tile_sig(n)
+        first_counts[sig] = first_counts.get(sig, 0) + 1
+    all_counts: dict[tuple[int, float, float, int], int] = {}
+    loop_end = n_bars * bar_beats
+    for n in notes:
+        start = float(n.get("start_beat") or 0.0)
+        if start < -1e-6 or start >= loop_end - 1e-6:
+            return None
+        sig = _note_tile_sig(n)
+        if sig not in first_counts:
+            return None
+        all_counts[sig] = all_counts.get(sig, 0) + 1
+    for sig, c0 in first_counts.items():
+        if all_counts.get(sig, 0) != c0 * n_bars:
+            return None
+    return first
+
+
 def write_midi_file(
     path: Path | str,
     notes: list[dict[str, Any]],

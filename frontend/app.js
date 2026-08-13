@@ -1223,8 +1223,7 @@ function pitchRatioFromSemitones(semis) {
 
 /**
  * BPM warp for any sample hit (one-shot or cycle trigger).
- * Only applies when a native BPM is tagged — never stretch pure one-shots by duration.
- * Melodic samples also multiply in key transpose from filename.
+ * Uses playbackRate (tempo + pitch coupled). Simple and reliable for loops.
  */
 function sampleBpmWarpOpts(role, buffer) {
   const blob = sampleNameBlob(role);
@@ -1269,8 +1268,11 @@ function parseBpmFromName(name) {
 /**
  * playbackRate so a loop matches session BPM (+ key transpose for melodic samples).
  * 1) Prefer BPM tag in name/path
- * 2) Else stretch so buffer duration ≈ nearest whole bars (keeps hats on the kick grid)
+ * 2) Else stretch so buffer duration ≈ nearest whole bars
  * 3) Melodic samples: multiply by 2^(semitones/12) from filename key → session key
+ *
+ * Note: rate couples tempo and pitch (not Ableton warp). Offline pitch-preserving
+ * stretch was removed — it turned long loops into a continuous tone.
  */
 function phrasePlaybackFor(buffer, roleOrName) {
   const blob = sampleNameBlob(roleOrName);
@@ -1287,7 +1289,6 @@ function phrasePlaybackFor(buffer, roleOrName) {
     rate = 1;
   } else {
     const barSec = secPer16th() * 16;
-    // Nearest 1..LOOP_BARS bars of wall-clock at session tempo
     let bars = Math.round(buffer.duration / barSec);
     if (!Number.isFinite(bars) || bars < 1) bars = 1;
     if (bars > LOOP_BARS) bars = LOOP_BARS;
@@ -1833,8 +1834,8 @@ function scheduleStep(step, when) {
 }
 
 /**
- * Sample phrase beds (hat loops, etc.): warp to session tempo and re-lock on the
- * kick cycle — free-running WebAudio loops drift when BPM tag is missing/wrong.
+ * Sample phrase beds (hat loops, etc.): warp to session tempo via playbackRate
+ * and re-lock on the kick cycle.
  * @param {number} when
  * @param {{ cutPrevious?: boolean }} [opts]
  */
@@ -1873,7 +1874,6 @@ function retuneWarpedSources() {
       const buf = scheduler.buffers[entry.role];
       if (buf) rate = phrasePlaybackFor(buf, entry.role).rate;
     } else if (entry.role && (entry.nativeBpm || entry.pitchSemitones != null)) {
-      // One-shots / non-phrase: recompute BPM × key rate
       const blob = sampleNameBlob(entry.role);
       const native = parseBpmFromName(blob);
       const semis = sampleKeyTransposeSemitones(blob, entry.role);
@@ -2016,7 +2016,10 @@ async function renderOneSerumStem(role, opts = {}) {
     const buf = await loadBufferUrl(result.url, { bust: true });
     if (buf) {
       console.info(
-        `Serum ${role}: fxp_loaded=${result.fxp_loaded} peak=${result.peak} cached=${result.cached} path=${s.path}`
+        `Serum ${role}: fxp_loaded=${result.fxp_loaded} peak=${result.peak} cached=${result.cached} ` +
+          `tiled=${result.tiled ?? false} render_bars=${result.render_bars ?? "?"} ` +
+          `load_ms=${result.load_ms ?? "?"} render_ms=${result.render_ms ?? "?"} ` +
+          `elapsed_ms=${result.elapsed_ms ?? "?"} path=${s.path}`
       );
     }
     return buf || null;
@@ -2028,6 +2031,8 @@ async function renderOneSerumStem(role, opts = {}) {
 /**
  * Offline-render bass/lead through DawDreamer + real preset (Python 3.12 host).
  * Returns map role -> AudioBuffer (or empty on failure).
+ * Sequential — the host worker is single-threaded. Prefer
+ * kickBackgroundSerumBounces() so playback is not blocked.
  */
 async function renderSerumStems() {
   const out = {};
@@ -2055,6 +2060,23 @@ async function renderSerumStems() {
     );
   }
   return out;
+}
+
+/**
+ * Start JS-synth cover immediately; swap each real stem in on the next grid tick.
+ * HTTP requests run together; the worker still serializes the actual bounces.
+ */
+function kickBackgroundSerumBounces() {
+  const roles = serumRolesNeedingBounce();
+  if (!roles.length) return;
+  setStatus(`Playing · Serum bouncing ${roles.length}…`);
+  for (const role of roles) {
+    serumPendingJs[role] = true;
+    refreshPlayingTrack(role, {
+      provisionalJs: true,
+      keepOldUntilReady: false,
+    }).catch((e) => console.warn(`Serum bounce ${role}:`, e));
+  }
 }
 
 /**
@@ -2159,10 +2181,8 @@ async function refreshPlayingTrack(role, opts = {}) {
     const t = baseType(role);
     if (isPhraseSample(buf, blob, t)) {
       scheduler.phraseRoles[role] = true;
-      // Kick-lock on next cycle boundary (avoid mid-bar free-run drift)
       const g = SLOT_GAIN[t] ?? 0.7;
       const { rate, nativeBpm, pitchSemitones } = phrasePlaybackFor(buf, role);
-      // Immediate preview, then cycle re-lock keeps phase with kick
       scheduleBuffer(buf, audioCtx.currentTime + 0.02, g, role, {
         loop: true,
         playbackRate: rate,
@@ -2262,18 +2282,10 @@ async function playLoop() {
   }
   if (!isPlayPending) return;
 
-  // Real Serum stems (async host) — each renderOneSerumStem also marks busy
-  let serumBuffers = {};
-  try {
-    serumBuffers = await renderSerumStems();
-  } catch (e) {
-    console.warn(e);
-  }
+  // Do not wait for Serum. JS synth covers until each bounce cuts over
+  // (same path as live dice / BPM change). Waiting here serialized 2–3
+  // full preset loads before the first kick.
   if (!isPlayPending) return;
-
-  for (const [role, buf] of Object.entries(serumBuffers)) {
-    buffers[role] = buf;
-  }
 
   const playable = Object.keys(buffers);
   const midiRoles = activeTrackIds().filter(
@@ -2329,12 +2341,11 @@ async function playLoop() {
   startWaveRaf();
 
   const phrases = Object.keys(scheduler.phraseRoles);
-  const serumRoles = Object.keys(serumStemRoles);
   let line = playingStatusLine();
   if (phrases.length) line += ` · beds: ${phrases.join(", ")}`;
-  if (serumRoles.length) line += ` · Serum: ${serumRoles.join(", ")}`;
-  else if (midiRoles.length) line += ` · JS synth MIDI (host offline)`;
+  if (midiRoles.length) line += ` · Serum bouncing…`;
   setStatus(line);
+  kickBackgroundSerumBounces();
 }
 
 /** Play button = toggle: start looping, or stop if already running/loading. */
@@ -2428,7 +2439,7 @@ function onBpmInput() {
     drawWaveformFrame();
     return;
   }
-  // Sample loops tagged with native BPM: warp rate only (filename-based).
+  // Sample loops: playbackRate follows BPM (filename-based).
   retuneWarpedSources();
   // Kicks follow BPM immediately (step timing). Serum is a fixed bounce —
   // stop old-tempo audio now and re-render at the new BPM (pitch-correct).
@@ -3267,16 +3278,12 @@ async function doReroll(role) {
         ? "S1"
         : "?";
   setStatus(`Rerolled ${role} · ${kind} · ${data.name || ""}`);
-  // Live transport: re-bounce Serum / reload sample so dice is audible immediately
+  // Live transport: keep the old stem (or JS) until the new bounce is ready.
   if (isPlaying) {
-    try {
-      await refreshPlayingTrack(role);
-      if (isPlaying && state.slots[role]?.path) {
-        setStatus(`Rerolled ${role} · ${kind} · ${data.name || ""} · live`);
-      }
-    } catch (e) {
+    setStatus(`Rerolled ${role} · ${kind} · ${data.name || ""} · bouncing…`);
+    refreshPlayingTrack(role).catch((e) => {
       setStatus(`Reroll live update failed: ${e.message || e}`);
-    }
+    });
   }
 }
 

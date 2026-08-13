@@ -265,7 +265,7 @@ exports/
 | Serum 1 / 2 filter | Options + per-track type (BASS, LEAD, …) |
 | MIDI | Monophonic 16-step grids; note length + edge drag |
 | Macros | S1 mapped renames; S2 names from `.SerumPreset` file |
-| Sample loops | BPM warp + kick-cycle re-lock |
+| Sample loops | Tempo match via `playbackRate` (pitch shifts with BPM) + kick-cycle re-lock — see [sample warp notes](docs/SAMPLE_WARP.md) |
 | Serum stems | Offline bounce; re-trigger each loop cycle |
 | **Export** | Audio + MIDI stems for Ableton (supported) |
 | **`.als` Live Set** | **Paused** — writer exists; Live open still unreliable (see `docs/ALS_EXPORT_STATUS.md`) |
@@ -282,6 +282,8 @@ exports/
 
 | Feature | Notes |
 |---------|--------|
+| **Writing-night hook** | 4-bar progression + dice-lead on `/` so Serum isn’t a tiled 1-bar wallpaper. Spec: [`docs/WRITING_NIGHT_HOOK.md`](docs/WRITING_NIGHT_HOOK.md). `/arrange` is deferred ([`docs/SUBTRACTIVE_ARRANGER.md`](docs/SUBTRACTIVE_ARRANGER.md)). |
+| **Pitch-preserving sample warp** | Long loops (8-bar beds, etc.) must match session BPM **without** chipmunk pitch. Homemade WSOLA **failed** (drone / single-tone on melodic loops). Next: Rubber Band or server-side quality stretch — full notes in [`docs/SAMPLE_WARP.md`](docs/SAMPLE_WARP.md) |
 | **“More like this”** | Seed similar sounds from a locked track |
 | **Richer library browser** | Search / filter / preview beyond role counts |
 
@@ -292,8 +294,9 @@ exports/
 | **User role overrides** | Tag roles in DB instead of filename heuristics only |
 | **Incremental rescan** | mtime / hash delta instead of full re-walk |
 | **Energy control** | First-class session energy (early requirements) |
-| **Key-aware sample pick** | Filter/pool by detected or tagged key |
-| **Richer MIDI** | Polyphony, more than 16-step monophonic grids |
+| **Key-aware sample pick** | Filter/pool by detected or tagged key (filename key → transpose already partial) |
+| **Warp markers / multi-bar clip length** | After solid global warp: optional 4- vs 8-bar loop braces |
+| **Richer MIDI** | Covered by the writing-night hook spec (64-step grids, pad voicings) |
 | **Serum param editing** | Beyond macros + offline bounce |
 | **Named saves polish** | Session browser UX for `saves/` |
 | **Stale path recovery** | Clear errors when DB paths move off disk |

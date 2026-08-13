@@ -198,7 +198,7 @@ def _resample(audio: np.ndarray, sr_in: int, sr_out: int) -> np.ndarray:
 
 
 def _time_stretch(audio: np.ndarray, rate: float) -> np.ndarray:
-    """Cheap resample stretch (rate > 1 = faster/shorter)."""
+    """Cheap resample stretch (rate > 1 = faster/shorter; couples pitch+tempo)."""
     rate = float(rate)
     if not np.isfinite(rate) or abs(rate - 1.0) < 1e-4 or audio.size == 0:
         return audio
@@ -252,7 +252,6 @@ def _key_pitch_ratio(name: str, track_type: str, session_key: str | None) -> tup
     semis = transpose_semitones_from_name(name, session_key)
     if semis is None or semis == 0:
         return 1.0, semis
-    # Cap extreme jumps (pack mis-tags) at ±7
     semis = max(-7, min(7, int(semis)))
     return pitch_ratio_from_semitones(semis), semis
 
@@ -271,8 +270,8 @@ def render_sample_loop(
     Render one sample track as a full-loop stereo/mono WAV at TARGET_SR.
 
     When `key` is set and the sample name tags a musical key (and track is
-    melodic: lead_audio / bass / …), pitch-shift via resample so the root
-    matches the session key (same cheap coupling as BPM warp).
+    melodic), pitch-shift via resample so the root matches the session key
+    (same cheap coupling as BPM warp).
 
     Returns dict with ok, path, duration_sec, mode (pattern|phrase|once), error?
     """

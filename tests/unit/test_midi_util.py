@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from backend.midi_util import (
+    collapse_tiled_bar_notes,
     degree_to_midi,
     grid_to_notes,
     parse_key_from_name,
@@ -27,6 +28,43 @@ def test_grid_quarters():
     assert notes[0]["start_beat"] == 0.0
     assert notes[1]["start_beat"] == 1.0
     assert notes[0]["duration_beats"] == 1.0
+
+
+def test_collapse_tiled_quarters():
+    grid: list[dict | None] = [None] * 16
+    for s in (0, 4, 8, 12):
+        grid[s] = {"degree": 0, "length": 2, "vel": 100}
+    notes = grid_to_notes(grid, key="F minor", octave=2, bars=4)
+    assert len(notes) == 16
+    first = collapse_tiled_bar_notes(notes, 4)
+    assert first is not None
+    assert len(first) == 4
+    assert [n["start_beat"] for n in first] == [0.0, 1.0, 2.0, 3.0]
+
+
+def test_collapse_rejects_changing_harmony():
+    # Four different roots — not a tiled 1-bar phrase
+    notes = [
+        {"midi": 41, "start_beat": 0.0, "duration_beats": 4.0, "velocity": 100},
+        {"midi": 49, "start_beat": 4.0, "duration_beats": 4.0, "velocity": 100},
+        {"midi": 44, "start_beat": 8.0, "duration_beats": 4.0, "velocity": 100},
+        {"midi": 46, "start_beat": 12.0, "duration_beats": 4.0, "velocity": 100},
+    ]
+    assert collapse_tiled_bar_notes(notes, 4) is None
+
+
+def test_collapse_rejects_note_hanging_past_bar():
+    notes = []
+    for bar in range(4):
+        notes.append(
+            {
+                "midi": 41,
+                "start_beat": bar * 4.0 + 3.5,
+                "duration_beats": 1.5,
+                "velocity": 100,
+            }
+        )
+    assert collapse_tiled_bar_notes(notes, 4) is None
 
 
 def test_write_midi_file(tmp_path: Path):

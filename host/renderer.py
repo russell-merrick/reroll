@@ -20,8 +20,14 @@ from typing import Any, Literal
 
 import numpy as np
 
+from backend.midi_util import collapse_tiled_bar_notes
+
 SAMPLE_RATE = 44100
-BUFFER = 128
+# Offline block size. 128 is a realtime default and makes a 4-bar bounce
+# (~7.5s @ 128) do ~2.5k process() calls. 2048 is still well under typical
+# Serum latency compensation. Combined with 1-bar-then-tile for repeating
+# MIDI patterns this is the main MIDI-edit latency cut.
+BUFFER = 2048
 
 DEFAULT_SERUM_DLL = Path(r"C:\Program Files\Common Files\VST3\Serum_x64.dll")
 DEFAULT_SERUM2 = Path(r"C:\Program Files\Common Files\VST3\Serum2.vst3")
@@ -305,16 +311,12 @@ def read_macros_from_synth(
     return out
 
 
-class SerumSession:
-    """
-    Warm DawDreamer + Serum instance for repeated renders.
+class _WarmSlot:
+    """One warm DawDreamer engine + plugin (Serum 1 *or* Serum 2)."""
 
-    Reuses the plugin process and skips reloading the same .fxp / .SerumPreset
-    when only MIDI/BPM/macros change — big latency win for live edits.
-    """
+    __slots__ = ("eng", "synth", "plugin_path", "fxp_path", "engine_kind", "loads", "renders")
 
     def __init__(self) -> None:
-        self._daw = None
         self.eng = None
         self.synth = None
         self.plugin_path: str | None = None
@@ -323,7 +325,7 @@ class SerumSession:
         self.loads: int = 0
         self.renders: int = 0
 
-    def summary(self) -> dict[str, Any]:
+    def snapshot(self) -> dict[str, Any]:
         return {
             "warm": self.synth is not None,
             "plugin": self.plugin_path,
@@ -331,6 +333,74 @@ class SerumSession:
             "engine": self.engine_kind,
             "loads": self.loads,
             "renders": self.renders,
+        }
+
+    def drop(self) -> None:
+        self.eng = None
+        self.synth = None
+        self.plugin_path = None
+        self.fxp_path = None
+        self.engine_kind = None
+
+
+class SerumSession:
+    """
+    Warm DawDreamer + Serum for repeated renders.
+
+    Keeps **Serum 1 and Serum 2** loaded in the same worker process so a mixed
+    bass/lead stack does not tear down one VST to bounce the other. Reloads a
+    preset only when the .fxp / .SerumPreset path changes.
+    """
+
+    def __init__(self) -> None:
+        self._daw = None
+        self._slots: dict[EngineKind, _WarmSlot] = {}
+        self.eng = None
+        self.synth = None
+        self.plugin_path: str | None = None
+        self.fxp_path: str | None = None
+        self.engine_kind: EngineKind | None = None
+        self.loads: int = 0
+        self.renders: int = 0
+
+    def _slot(self, kind: EngineKind) -> _WarmSlot:
+        slot = self._slots.get(kind)
+        if slot is None:
+            slot = _WarmSlot()
+            self._slots[kind] = slot
+        return slot
+
+    def _activate(self, slot: _WarmSlot) -> None:
+        self.eng = slot.eng
+        self.synth = slot.synth
+        self.plugin_path = slot.plugin_path
+        self.fxp_path = slot.fxp_path
+        self.engine_kind = slot.engine_kind
+        self.loads = sum(s.loads for s in self._slots.values())
+        self.renders = sum(s.renders for s in self._slots.values())
+
+    def _drop_slot(self, kind: EngineKind | None) -> None:
+        if kind is None:
+            return
+        slot = self._slots.get(kind)
+        if slot:
+            slot.drop()
+        if self.engine_kind == kind:
+            self.eng = None
+            self.synth = None
+            self.plugin_path = None
+            self.fxp_path = None
+            self.engine_kind = None
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "warm": any(s.synth is not None for s in self._slots.values()),
+            "plugin": self.plugin_path,
+            "fxp": self.fxp_path,
+            "engine": self.engine_kind,
+            "loads": sum(s.loads for s in self._slots.values()),
+            "renders": sum(s.renders for s in self._slots.values()),
+            "slots": {k: s.snapshot() for k, s in self._slots.items()},
         }
 
     def _ensure_daw(self):
@@ -359,28 +429,32 @@ class SerumSession:
         plugin_s = str(plugin.resolve() if hasattr(plugin, "resolve") else plugin)
         fxp_s = str(Path(fxp_path).resolve()) if fxp_path else None
         daw = self._ensure_daw()
+        slot = self._slot(engine_kind)
 
-        # New plugin binary (Serum1 ↔ Serum2) → new engine/processor
-        if self.synth is None or self.plugin_path != plugin_s:
-            self.eng = daw.RenderEngine(SAMPLE_RATE, BUFFER)
-            self.synth = self.eng.make_plugin_processor("serum", plugin_s)
-            self.plugin_path = plugin_s
-            self.fxp_path = None
-            self.engine_kind = engine_kind
-            self.loads += 1
+        # New plugin binary for this engine only — leave the other Serum warm.
+        if slot.synth is None or slot.plugin_path != plugin_s:
+            slot.eng = daw.RenderEngine(SAMPLE_RATE, BUFFER)
+            slot.synth = slot.eng.make_plugin_processor("serum", plugin_s)
+            slot.plugin_path = plugin_s
+            slot.fxp_path = None
+            slot.engine_kind = engine_kind
+            slot.loads += 1
+
+        self._activate(slot)
 
         fxp_loaded = False
-        if fxp_s and self.fxp_path != fxp_s:
-            ok = bool(load_preset(self.synth, fxp_path))
+        if fxp_s and slot.fxp_path != fxp_s:
+            ok = bool(load_preset(slot.synth, fxp_path))
             if not ok:
                 # Do NOT mark path as loaded — next call should retry, and we must
                 # not cache init/default audio under this preset key.
                 return False, f"failed to load preset: {fxp_s}"
             fxp_loaded = True
-            self.fxp_path = fxp_s
-            self.engine_kind = engine_kind
-            self.loads += 1
-        elif fxp_s and self.fxp_path == fxp_s:
+            slot.fxp_path = fxp_s
+            slot.engine_kind = engine_kind
+            slot.loads += 1
+            self._activate(slot)
+        elif fxp_s and slot.fxp_path == fxp_s:
             fxp_loaded = True  # already warm with this preset
         return fxp_loaded, ""
 
@@ -440,6 +514,8 @@ class SerumSession:
         use_cache: bool = True,
         macros: list[float] | None = None,
     ) -> dict[str, Any]:
+        import time as _time
+
         from scipy.io import wavfile
 
         engine_kind = engine_for_preset(fxp_path)
@@ -453,8 +529,15 @@ class SerumSession:
             return {"ok": False, "error": str(exc)}
 
         n_macros = len(macro_indices_for(engine_kind))
-        duration_sec = (60.0 / float(bpm)) * 4.0 * int(bars)
+        bars_i = max(1, int(bars))
+        collapsed = collapse_tiled_bar_notes(notes, bars_i)
+        render_notes = collapsed if collapsed is not None else notes
+        render_bars = 1 if collapsed is not None else bars_i
+        tile_n = bars_i // render_bars
+        duration_sec = (60.0 / float(bpm)) * 4.0 * render_bars
+        out_duration_sec = (60.0 / float(bpm)) * 4.0 * bars_i
         macro_vals = _normalize_macros(macros, n=n_macros)
+        t0 = _time.perf_counter()
 
         cache_key = hashlib.sha1(
             json.dumps(
@@ -484,18 +567,28 @@ class SerumSession:
                 "engine": engine_kind,
                 "macros": macro_vals,
                 "warm": self.synth is not None,
+                "load_ms": 0,
+                "render_ms": 0,
+                "elapsed_ms": int((_time.perf_counter() - t0) * 1000),
             }
 
         try:
             fxp_loaded, err = self.ensure_synth(fxp_path, plugin_path)
+            load_ms = int((_time.perf_counter() - t0) * 1000)
             if err:
-                return {"ok": False, "error": err, "engine": engine_kind}
+                return {
+                    "ok": False,
+                    "error": err,
+                    "engine": engine_kind,
+                    "load_ms": load_ms,
+                }
             # Explicit preset required but not on the synth → refuse to render init sound
             if fxp_path and not fxp_loaded:
                 return {
                     "ok": False,
                     "error": f"preset not loaded: {fxp_path}",
                     "engine": engine_kind,
+                    "load_ms": load_ms,
                 }
             assert self.eng is not None and self.synth is not None
 
@@ -504,7 +597,7 @@ class SerumSession:
 
             self.synth.clear_midi()
             # beats=True — DawDreamer default is seconds
-            for n in notes:
+            for n in render_notes:
                 midi = int(n["midi"])
                 start = float(n["start_beat"])
                 dur = max(0.05, float(n["duration_beats"]))
@@ -513,20 +606,22 @@ class SerumSession:
                 self.synth.add_midi_note(midi, vel, start, dur, beats=True)
 
             self.eng.load_graph([(self.synth, [])])
+            t_render = _time.perf_counter()
             self.eng.render(duration_sec)
             audio = self.eng.get_audio()
+            render_ms = int((_time.perf_counter() - t_render) * 1000)
             latency = 0
             try:
                 latency = int(self.synth.get_latency_samples() or 0)
             except Exception:
                 latency = 0
-            self.renders += 1
+            slot = self._slots.get(engine_kind)
+            if slot:
+                slot.renders += 1
+            self.renders = sum(s.renders for s in self._slots.values())
         except Exception as exc:
-            # Drop warm state — next call rebuilds
-            self.eng = None
-            self.synth = None
-            self.plugin_path = None
-            self.fxp_path = None
+            # Drop only this engine — the other Serum can stay warm
+            self._drop_slot(engine_kind)
             return {"ok": False, "error": str(exc), "engine": engine_kind}
 
         if audio is None:
@@ -537,8 +632,8 @@ class SerumSession:
 
         onset_shift = 0
         first_note_beat = 0.0
-        if notes:
-            first_note_beat = min(float(n["start_beat"]) for n in notes)
+        if render_notes:
+            first_note_beat = min(float(n["start_beat"]) for n in render_notes)
         expected_first = int(round(first_note_beat * (60.0 / float(bpm)) * SAMPLE_RATE))
         onset = _find_audio_onset(audio)
         if onset is not None:
@@ -550,7 +645,17 @@ class SerumSession:
                 audio = np.pad(audio, ((0, 0), (pad, 0)))
                 onset_shift = -pad
 
-        target = max(1, int(round(duration_sec * SAMPLE_RATE)))
+        # Trim the rendered period first, then tile out to the full loop.
+        period = max(1, int(round(duration_sec * SAMPLE_RATE)))
+        n = audio.shape[1]
+        if n < period:
+            audio = np.pad(audio, ((0, 0), (0, period - n)))
+        elif n > period:
+            audio = audio[:, :period]
+        if tile_n > 1:
+            audio = np.tile(audio, (1, tile_n))
+
+        target = max(1, int(round(out_duration_sec * SAMPLE_RATE)))
         n = audio.shape[1]
         if n < target:
             audio = np.pad(audio, ((0, 0), (0, target - n)))
@@ -575,7 +680,9 @@ class SerumSession:
             "macros": macro_vals,
             "plugin": str(plugin),
             "engine": engine_kind,
-            "duration_sec": duration_sec,
+            "duration_sec": out_duration_sec,
+            "render_bars": render_bars,
+            "tiled": tile_n > 1,
             "sample_rate": SAMPLE_RATE,
             "latency_samples": latency,
             "onset_shift_samples": onset_shift,
@@ -583,6 +690,9 @@ class SerumSession:
             "expected_first_sample": expected_first,
             "target_samples": target,
             "warm": True,
+            "load_ms": load_ms,
+            "render_ms": render_ms,
+            "elapsed_ms": int((_time.perf_counter() - t0) * 1000),
         }
 
 
