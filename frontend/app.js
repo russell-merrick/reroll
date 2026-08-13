@@ -3024,9 +3024,21 @@ async function applyThemeToTrack(id) {
   console.info("Theme apply", state.progression?.recipe_id, ids);
 }
 
+/** Last committed session #key — #key.change fires after the select already moved. */
+let lastSessionKey = null;
+
+function sessionKeyValue() {
+  return $("#key")?.value || "F minor";
+}
+
+function rememberSessionKey(key) {
+  lastSessionKey = key || sessionKeyValue();
+}
+
 async function rekeyAllMidi() {
   if (!window.MidiEngine) return;
-  const key = $("#key")?.value || "F minor";
+  const key = sessionKeyValue();
+  const prevKey = lastSessionKey || key;
   if (state.progression) {
     const res = await api("/api/harmony/apply", {
       method: "POST",
@@ -3037,6 +3049,9 @@ async function rekeyAllMidi() {
       }),
     });
     pushUndo("Key");
+    const entry = undoStack[undoStack.length - 1];
+    if (entry?.snap) entry.snap.key = prevKey;
+    rememberSessionKey(key);
     if (res.progression) state.progression = res.progression;
     const ids = applyHarmonyMidi(res.midi || {});
     const rewritten = new Set(ids);
@@ -3070,6 +3085,7 @@ async function rekeyAllMidi() {
       }
     }
   }
+  rememberSessionKey(key);
 }
 
 const SERUM_ENGINE_LABEL = { s1: "Serum 1", s2: "Serum 2", both: "Serum 1+2", none: "none" };
@@ -3313,6 +3329,7 @@ function applyUserSettings(s) {
       const opt = [...keyEl.options].find((o) => o.textContent === val);
       if (opt) keyEl.value = opt.value;
     }
+    rememberSessionKey(keyEl.value);
   }
   if (s.style != null && $("#style")) {
     $("#style").value = String(s.style);
@@ -4488,10 +4505,15 @@ function commitMidiDraft(role, opts = {}) {
 }
 
 function initMidiEditorUi() {
-  $("#key")?.addEventListener("change", () => {
+  const keyEl = $("#key");
+  keyEl?.addEventListener("focus", () => {
+    rememberSessionKey(keyEl.value);
+  });
+  keyEl?.addEventListener("change", () => {
     Promise.resolve(rekeyAllMidi())
       .catch((e) => setStatus(`Theme apply failed: ${e.message}`))
       .finally(() => {
+        rememberSessionKey(keyEl.value);
         for (const role of Object.keys(midiEditors)) {
           renderMidiEditor(role);
         }
@@ -4933,6 +4955,7 @@ function restoreDocSnapshot(snap) {
     if (bpmEl && snap.bpm != null) bpmEl.value = String(snap.bpm);
     if (keyEl && snap.key) keyEl.value = snap.key;
     if (styleEl && snap.style != null) styleEl.value = snap.style;
+    rememberSessionKey(keyEl?.value || snap.key);
 
     trackSeq = Number(snap.trackSeq) || 0;
     const order = Array.isArray(snap.trackOrder) ? snap.trackOrder : [];
@@ -5146,6 +5169,7 @@ function applyLoadedLoop(doc) {
   if (bpmEl && doc.bpm != null) bpmEl.value = String(doc.bpm);
   if (keyEl && doc.key) keyEl.value = doc.key;
   if (styleEl && doc.style != null) styleEl.value = doc.style;
+  rememberSessionKey(keyEl?.value || doc.key);
 
   const filterOn = Boolean(doc.options?.filterRisers);
   state.options.filterRisers = filterOn;
@@ -6132,6 +6156,7 @@ async function init() {
       ensureInstrumentsState();
     }
     initDefaultTracks();
+    rememberSessionKey();
     await loadLibrary();
     // Initial fill only — don't autoplay (needs user gesture for AudioContext)
     await doGenerate({ autoPlay: false });
