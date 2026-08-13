@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from .midi_util import MINOR, STEPS_PER_BAR, degree_to_midi, parse_key
@@ -695,3 +696,165 @@ def dice_lead_grid(
                 if prev is None:
                     prev = pitch
     return _midi_state(pattern_id="prog-lead", octave=octv, key=minor_key, grid=out)
+
+
+def apply_key(progression: dict[str, Any], key: str) -> dict[str, Any]:
+    """Same recipe (or romans), new tonic, still Aeolian. Keeps locked."""
+    if not isinstance(progression, dict) or not progression:
+        raise ValueError("progression required")
+    rid = progression.get("recipe_id")
+    if rid in RECIPES:
+        recipe: str | dict[str, Any] = rid
+    else:
+        chords = progression.get("chords") or []
+        romans = [
+            str(c.get("roman") or "i")
+            for c in chords
+            if isinstance(c, dict)
+        ]
+        if len(romans) != BARS:
+            raise ValueError("progression must have 4 chords")
+        recipe = {
+            "id": rid or "custom",
+            "label": progression.get("label") or "–".join(romans),
+            "romans": romans,
+            "pad_seventh": bool(progression.get("pad_seventh")),
+        }
+    out = realize(recipe, key)
+    out["locked"] = bool(progression.get("locked"))
+    out["style_used"] = progression.get("style_used") or ""
+    if progression.get("diced_at"):
+        out["diced_at"] = progression["diced_at"]
+    return out
+
+
+def _track_midi(track: dict[str, Any]) -> dict[str, Any] | None:
+    midi = track.get("midi")
+    return midi if isinstance(midi, dict) else None
+
+
+def _track_octave(track: dict[str, Any], default: int) -> int:
+    if track.get("octave") is not None:
+        return int(track["octave"])
+    midi = _track_midi(track)
+    if midi is not None and midi.get("octave") is not None:
+        return int(midi["octave"])
+    return int(default)
+
+
+def _validate_track_grids(tracks: list[dict[str, Any]]) -> None:
+    if len(tracks) > 32:
+        raise ValueError("too many tracks")
+    for track in tracks:
+        midi = _track_midi(track) if isinstance(track, dict) else None
+        if not midi:
+            continue
+        grid = midi.get("grid")
+        if grid is None:
+            continue
+        if not isinstance(grid, list) or len(grid) not in (STEPS_PER_BAR, LOOP_STEPS):
+            raise ValueError("grid length must be 16 or 64")
+
+
+def rewrite_bass_pad(
+    progression: dict[str, Any],
+    tracks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Rewrite bass roots + pad voicings. Lead is untouched."""
+    midi_out: dict[str, Any] = {}
+    for track in tracks:
+        if not isinstance(track, dict):
+            continue
+        tid = str(track.get("id") or "").strip()
+        if not tid:
+            continue
+        role = harmony_role(track.get("type") or tid)
+        if role == "bass":
+            midi_out[tid] = rewrite_bass_grid(
+                progression,
+                _track_midi(track),
+                octave=_track_octave(track, 2),
+            )
+        elif role == "pad":
+            midi_out[tid] = rewrite_pad_grid(
+                progression,
+                octave=_track_octave(track, 3),
+            )
+    return midi_out
+
+
+def _restamp_lead(
+    midi: dict[str, Any],
+    progression: dict[str, Any],
+    octave: int,
+) -> dict[str, Any]:
+    """Keep a progression-source lead grid; restamp Aeolian key."""
+    grid = midi.get("grid")
+    if isinstance(grid, list):
+        grid = list(grid)
+    bars = (
+        BARS
+        if midi.get("bars") == BARS
+        or (isinstance(grid, list) and len(grid) == LOOP_STEPS)
+        else (midi.get("bars") or 1)
+    )
+    return {
+        "patternId": midi.get("patternId") or "prog-lead",
+        "octave": int(octave),
+        "key": progression.get("key") or tonic_minor_label(""),
+        "bars": bars,
+        "source": "progression",
+        "locked": bool(midi.get("locked")),
+        "grid": grid,
+    }
+
+
+def dice_chords(
+    *,
+    key: str,
+    style: str = "",
+    tracks: list[dict[str, Any]] | None = None,
+    avoid_recipe_id: str | None = None,
+) -> dict[str, Any]:
+    """Pick a recipe, realize Aeolian, rewrite bass/pad MIDI."""
+    tracks = list(tracks or [])
+    _validate_track_grids(tracks)
+    rec = pick_recipe(style, avoid=avoid_recipe_id)
+    prog = realize(rec, key)
+    prog["style_used"] = (style or "").strip()
+    prog["diced_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"progression": prog, "midi": rewrite_bass_pad(prog, tracks)}
+
+
+def apply_harmony(
+    *,
+    key: str,
+    progression: dict[str, Any],
+    tracks: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Respell the same recipe at a new tonic. Rewrites bass/pad; lead if source=progression."""
+    tracks = list(tracks or [])
+    if not isinstance(progression, dict) or not progression:
+        raise ValueError("progression required")
+    bars = progression.get("bars")
+    if bars is not None and int(bars) != BARS:
+        raise ValueError("progression bars must be 4")
+    chords = progression.get("chords")
+    if chords is not None and (not isinstance(chords, list) or len(chords) != BARS):
+        raise ValueError("progression bars must be 4")
+    _validate_track_grids(tracks)
+    prog = apply_key(progression, key)
+    midi_out = rewrite_bass_pad(prog, tracks)
+    for track in tracks:
+        if not isinstance(track, dict):
+            continue
+        tid = str(track.get("id") or "").strip()
+        if not tid:
+            continue
+        if harmony_role(track.get("type") or tid) != "lead":
+            continue
+        midi = _track_midi(track)
+        if not midi or midi.get("source") != "progression":
+            continue
+        midi_out[tid] = _restamp_lead(midi, prog, _track_octave(track, 4))
+    return {"progression": prog, "midi": midi_out}

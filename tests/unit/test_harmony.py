@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
+from fastapi import HTTPException
+
+from backend.app import (
+    ApplyHarmonyRequest,
+    DiceChordsRequest,
+    api_dice_chords,
+    api_harmony_apply,
+    api_harmony_recipes,
+)
 from backend.harmony import (
     RECIPES,
     _style_recipe_weights,
+    apply_harmony,
+    apply_key,
+    dice_chords,
     dice_lead_grid,
     harmony_role,
     pick_recipe,
@@ -159,3 +171,107 @@ def test_dice_lead_avoid_moves_bar_start():
     bar0 = [n for n in notes if n["start_beat"] == 0.0]
     assert bar0
     assert bar0[0]["midi"] % 12 != 5
+
+
+def test_apply_key_keeps_recipe_and_locked():
+    prog = realize("i_VI_III_VII", "F minor")
+    prog["locked"] = True
+    prog["style_used"] = "Melodic Techno"
+    out = apply_key(prog, "C major")
+    assert out["recipe_id"] == "i_VI_III_VII"
+    assert out["locked"] is True
+    assert out["key"] == "C minor"
+    assert [c["root_pc"] for c in out["chords"]] == [0, 8, 3, 10]
+
+
+def test_f_major_session_bass_vi_is_db_not_d():
+    """Hear-it: #key = F major, i–VI–III–VII bar-1 bass root is Db (49), not D (50)."""
+    out = dice_chords(
+        key="F major",
+        style="melodic techno",
+        tracks=[{"id": "bass", "type": "bass", "octave": 2}],
+        avoid_recipe_id="pedal_i",
+    )
+    # Force the anthem recipe so the assertion is the VI (Db), not a random pick.
+    prog = realize("i_VI_III_VII", "F major")
+    midi = rewrite_bass_grid(prog, octave=2)
+    assert midi["key"] == "F minor"
+    bar1 = midi["grid"][16]
+    assert bar1 is not None
+    assert bar1["degree"] == 5  # Aeolian VI
+    notes = grid_to_notes(midi["grid"], key=midi["key"], octave=2, bars=4)
+    bar1_notes = [n for n in notes if 4.0 <= n["start_beat"] < 8.0]
+    assert bar1_notes
+    assert bar1_notes[0]["midi"] == 49  # Db2
+    assert all(n["midi"] != 50 for n in bar1_notes)
+    assert out["progression"]["key"] == "F minor"
+
+
+def test_apply_rewrites_bass_not_user_lead():
+    prog = realize("i_VI_III_VII", "F minor")
+    lead_grid = [{"degree": 0, "length": 2, "vel": 100}] + [None] * 63
+    result = apply_harmony(
+        key="C major",
+        progression=prog,
+        tracks=[
+            {"id": "bass", "type": "bass", "octave": 2},
+            {
+                "id": "lead",
+                "type": "lead",
+                "octave": 4,
+                "midi": {
+                    "source": "user",
+                    "key": "F minor",
+                    "bars": 4,
+                    "grid": lead_grid,
+                },
+            },
+            {
+                "id": "lead2",
+                "type": "lead",
+                "octave": 4,
+                "midi": {
+                    "source": "progression",
+                    "key": "F minor",
+                    "bars": 4,
+                    "patternId": "prog-lead",
+                    "grid": lead_grid,
+                },
+            },
+        ],
+    )
+    assert "bass" in result["midi"]
+    assert "lead" not in result["midi"]
+    assert result["midi"]["lead2"]["key"] == "C minor"
+    assert result["midi"]["lead2"]["source"] == "progression"
+    assert result["progression"]["key"] == "C minor"
+
+
+def test_recipes_endpoint_lists_eight():
+    out = api_harmony_recipes()
+    assert out["ok"] is True
+    assert out["loop_bars"] == 4
+    assert len(out["recipes"]) == 8
+
+
+def test_dice_chords_locked_409():
+    try:
+        api_dice_chords(DiceChordsRequest(locked=True, tracks=[]))
+        raise AssertionError("expected 409")
+    except HTTPException as exc:
+        assert exc.status_code == 409
+        assert exc.detail == "theme locked"
+
+
+def test_apply_rejects_wrong_bars():
+    try:
+        api_harmony_apply(
+            ApplyHarmonyRequest(
+                key="F minor",
+                progression={"recipe_id": "i_VI_III_VII", "bars": 8, "chords": []},
+                tracks=[],
+            )
+        )
+        raise AssertionError("expected 400")
+    except HTTPException as exc:
+        assert exc.status_code == 400

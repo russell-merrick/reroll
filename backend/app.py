@@ -32,8 +32,10 @@ from pydantic import BaseModel, Field
 from .catalog import CATALOG
 from .export_loop import export_loop
 from .generate import catalog_style_suggestions, generate_loop, generate_tracks, reroll_slot
+from .harmony import RECIPES, apply_harmony, dice_chords
 from .persist import catalog_stats, default_db_path, load_catalog, save_catalog
 from .scanner import DEFAULT_SAMPLE_ROOTS, DEFAULT_SERUM_ROOTS, scan_library
+from .timing import LOOP_BARS
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -163,6 +165,27 @@ class ExportSelectRequest(BaseModel):
 
     paths: list[str] = Field(default_factory=list)
     folder: str | None = None
+
+
+class HarmonyTrack(BaseModel):
+    id: str
+    type: str
+    midi: dict[str, Any] | None = None
+    octave: int | None = None
+
+
+class DiceChordsRequest(BaseModel):
+    key: str = "F minor"
+    style: str = ""
+    avoid_recipe_id: str | None = None
+    locked: bool = False
+    tracks: list[HarmonyTrack] = Field(default_factory=list)
+
+
+class ApplyHarmonyRequest(BaseModel):
+    key: str = "F minor"
+    progression: dict[str, Any]
+    tracks: list[HarmonyTrack] = Field(default_factory=list)
 
 
 class UserSettings(BaseModel):
@@ -463,6 +486,61 @@ def api_generate(body: GenerateRequest) -> dict[str, Any]:
         filter_risers=bool(body.filter_risers),
         filter_factory_serum=bool(body.filter_factory_serum),
     )
+
+
+def _harmony_track_dicts(tracks: list[HarmonyTrack]) -> list[dict[str, Any]]:
+    if len(tracks) > 32:
+        raise HTTPException(status_code=400, detail="too many tracks")
+    return [t.model_dump() for t in tracks]
+
+
+@app.get("/api/harmony/recipes")
+def api_harmony_recipes() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "loop_bars": LOOP_BARS,
+        "recipes": [
+            {
+                "id": rec["id"],
+                "label": rec["label"],
+                "romans": list(rec["romans"]),
+                "lanes": list(rec["lanes"]),
+                "pad_seventh": bool(rec["pad_seventh"]),
+            }
+            for rec in RECIPES.values()
+        ],
+    }
+
+
+@app.post("/api/harmony/dice-chords")
+def api_dice_chords(body: DiceChordsRequest) -> dict[str, Any]:
+    if body.locked:
+        raise HTTPException(status_code=409, detail="theme locked")
+    try:
+        result = dice_chords(
+            key=body.key,
+            style=body.style,
+            tracks=_harmony_track_dicts(body.tracks),
+            avoid_recipe_id=body.avoid_recipe_id,
+        )
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, **result}
+
+
+@app.post("/api/harmony/apply")
+def api_harmony_apply(body: ApplyHarmonyRequest) -> dict[str, Any]:
+    if not body.progression:
+        raise HTTPException(status_code=400, detail="progression required")
+    try:
+        result = apply_harmony(
+            key=body.key,
+            progression=body.progression,
+            tracks=_harmony_track_dicts(body.tracks),
+        )
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, **result}
 
 
 @app.post("/api/reroll")
@@ -1530,3 +1608,8 @@ def script() -> FileResponse:
 @app.get("/midi.js")
 def midi_script() -> FileResponse:
     return FileResponse(FRONTEND / "midi.js", media_type="application/javascript")
+
+
+@app.get("/harmony.js")
+def harmony_script() -> FileResponse:
+    return FileResponse(FRONTEND / "harmony.js", media_type="application/javascript")

@@ -61,6 +61,37 @@
       <button type="button" class="btn primary big" id="btn-generate" data-tip="Reroll unlocked tracks from your library (samples + Serum)">🎲 Reroll</button>
     </section>
 
+    <section class="theme" id="theme-panel" aria-label="Theme">
+      <div class="theme-label">Theme</div>
+      <div class="theme-romans" id="theme-romans" aria-label="Progression">
+        <span class="theme-roman empty">— no theme —</span>
+      </div>
+      <span class="theme-meta" id="theme-meta"></span>
+      <div class="theme-actions">
+        <button
+          type="button"
+          class="icon-btn lock"
+          id="btn-theme-lock"
+          aria-pressed="false"
+          data-tip="Lock theme — keep this progression"
+          disabled
+        >🔓 Lock</button>
+        <button
+          type="button"
+          class="btn"
+          id="btn-dice-chords"
+          data-tip="Dice a 4-bar chord recipe and rewrite bass / pad MIDI"
+        >🎲 Chords</button>
+        <button
+          type="button"
+          class="btn"
+          id="btn-dice-lead"
+          data-tip="Dice a lead over the current theme"
+          disabled
+        >🎲 Lead</button>
+      </div>
+    </section>
+
     <!-- Full-width loop waveform + playhead (above Loop) -->
     <section class="wave-overview" id="wave-overview" aria-label="Loop waveform">
       <div class="wave-overview-head">
@@ -448,6 +479,7 @@
   </dialog>
 
   <script src="midi.js?v=64step-voices-2"></script>
-  <script src="app.js?v=midi-64step-2"></script>
+  <script src="harmony.js?v=theme-v1"></script>
+  <script src="app.js?v=theme-dice-1"></script>
 </body>
 </html>

@@ -496,6 +496,87 @@ html[data-theme="rainbow"] .slot.serum {
   border-radius: var(--radius);
 }
 
+/* Theme panel — session-level 4-bar progression */
+.theme {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 10px 16px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.theme.locked {
+  border-color: var(--accent-dim);
+  box-shadow: inset 0 0 0 1px var(--accent-glow);
+}
+
+.theme-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.theme-romans {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 180px;
+}
+
+.theme-roman {
+  min-width: 2.6em;
+  text-align: center;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.theme-roman.empty {
+  min-width: 7.5em;
+  color: var(--text-faint);
+  font-weight: 500;
+}
+
+.theme-roman.on {
+  border-color: var(--accent-dim);
+  background: rgba(110, 231, 183, 0.14);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-glow);
+}
+
+.theme-meta {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.theme-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.theme-actions .icon-btn.lock {
+  min-width: 76px;
+  height: 34px;
+  padding: 0 10px;
+  gap: 4px;
+}
+
+.theme-actions .btn:disabled,
+.theme-actions .icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .field {
   display: flex;
   flex-direction: column;

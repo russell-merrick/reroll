@@ -30,7 +30,7 @@ const state = {
   currentLoopId: null,
   /** Last saved / loaded display name */
   currentLoopName: null,
-  /** Session theme (PR 3 snapshot only; PR 2 fills this). */
+  /** Session theme — empty until first Dice chords. */
   progression: null,
 };
 
@@ -150,30 +150,6 @@ function isSerumTrack(id) {
   return isSerumType(baseType(id));
 }
 
-const PAD_TYPES = new Set(["pad", "pads", "strings", "chorus", "keys"]);
-const LEAD_TYPES = new Set([
-  "lead",
-  "synth",
-  "arp",
-  "pluck",
-  "seq",
-  "hoover",
-  "guitar",
-  "brass",
-]);
-
-/** Mirror of backend.harmony.harmony_role — bass | pad | lead | null. */
-function harmonyRole(trackType) {
-  const t = String(trackType || "")
-    .split("__")[0]
-    .trim()
-    .toLowerCase();
-  if (t === "bass") return "bass";
-  if (PAD_TYPES.has(t)) return "pad";
-  if (LEAD_TYPES.has(t)) return "lead";
-  return null;
-}
-
 function midiRoleForSlot(role) {
   const hr = harmonyRole(baseType(role));
   if (hr === "bass" || hr === "pad") return hr;
@@ -196,8 +172,75 @@ function markMidiUser(role) {
   markMidiCustom(role);
 }
 
-/** PR 3 stub — PR 2 replaces. restoreDocSnapshot always calls this. */
-function renderThemePanel() {}
+function themePlayBar() {
+  if (!isPlaying) return -1;
+  const steps = scheduler.totalSteps || LOOP_BARS * 16;
+  const step = Math.floor(getCycleProgress() * steps);
+  return Math.min(3, Math.max(0, Math.floor(step / 16)));
+}
+
+function highlightThemeBar() {
+  const romansEl = $("#theme-romans");
+  if (!romansEl) return;
+  const bar = themePlayBar();
+  romansEl.querySelectorAll(".theme-roman").forEach((el) => {
+    const i = Number(el.dataset.bar);
+    el.classList.toggle("on", isPlaying && Number.isFinite(i) && i === bar);
+  });
+}
+
+function renderThemePanel() {
+  const panel = $("#theme-panel");
+  if (!panel) return;
+  const prog = state.progression;
+  const locked = Boolean(prog?.locked);
+  panel.classList.toggle("locked", locked);
+
+  const romansEl = $("#theme-romans");
+  if (romansEl) {
+    const chords = prog?.chords;
+    romansEl.innerHTML = "";
+    if (!chords?.length) {
+      const empty = document.createElement("span");
+      empty.className = "theme-roman empty";
+      empty.textContent = "— no theme —";
+      romansEl.appendChild(empty);
+    } else {
+      const bar = themePlayBar();
+      for (let i = 0; i < 4; i++) {
+        const cell = document.createElement("span");
+        cell.className = "theme-roman" + (isPlaying && i === bar ? " on" : "");
+        cell.dataset.bar = String(i);
+        cell.textContent = chords[i]?.roman || "—";
+        romansEl.appendChild(cell);
+      }
+    }
+  }
+
+  const meta = $("#theme-meta");
+  if (meta) {
+    meta.textContent = prog
+      ? themeSubtitle(prog, $("#key")?.value || "")
+      : "";
+  }
+
+  const lockBtn = $("#btn-theme-lock");
+  if (lockBtn) {
+    lockBtn.disabled = !prog;
+    lockBtn.classList.toggle("on", locked);
+    lockBtn.setAttribute("aria-pressed", String(locked));
+    lockBtn.textContent = locked ? "🔒 Lock" : "🔓 Lock";
+    lockBtn.dataset.tip = locked
+      ? "Unlock theme — allow Dice chords"
+      : "Lock theme — keep this progression";
+  }
+
+  const diceBtn = $("#btn-dice-chords");
+  if (diceBtn) diceBtn.disabled = locked;
+
+  const leadBtn = $("#btn-dice-lead");
+  if (leadBtn) leadBtn.disabled = true;
+}
 
 function newTrackId(type) {
   trackSeq += 1;
@@ -686,6 +729,7 @@ function drawWaveformFrame() {
 
   const section = $("#wave-overview");
   section?.classList.toggle("is-playing", isPlaying);
+  highlightThemeBar();
 }
 
 function waveRafLoop() {
@@ -2862,9 +2906,134 @@ function ensureSlotMidi(role) {
   return state.slots[role].midi;
 }
 
-function rekeyAllMidi() {
+function harmonyTracksPayload() {
+  return activeTrackIds()
+    .filter((id) => isSerumTrack(id))
+    .map((id) => {
+      const s = state.slots[id] || {};
+      return {
+        id,
+        type: baseType(id),
+        midi: cloneMidi(s.midi),
+        octave: s.midi?.octave ?? null,
+      };
+    });
+}
+
+function applyHarmonyMidi(midiMap) {
+  const ids = Object.keys(midiMap || {});
+  for (const id of ids) {
+    if (!state.slots[id]) continue;
+    state.slots[id].midi = cloneMidi(midiMap[id]);
+    applySlot(id, { ...state.slots[id] });
+    if (midiEditors[id]) {
+      midiEditors[id].draft = { ...midiEditors[id].draft, ...cloneMidi(midiMap[id]) };
+      renderMidiEditor(id);
+    }
+    if (isPlaying) {
+      refreshPlayingTrack(id, { keepOldUntilReady: true }).catch((e) =>
+        console.warn(`theme refresh ${id}:`, e)
+      );
+    }
+  }
+  return ids;
+}
+
+function rewrittenRoleLabels(ids) {
+  const labels = [];
+  for (const id of ids) {
+    const r = harmonyRole(baseType(id));
+    if (r === "bass") labels.push("bass");
+    else if (r === "pad") labels.push("pads");
+    else if (r === "lead") labels.push("lead");
+  }
+  return [...new Set(labels)];
+}
+
+async function diceChords() {
+  if (state.progression?.locked) {
+    setStatus("Theme locked — unlock to dice chords");
+    return;
+  }
+  pushUndo("Dice chords");
+  const res = await api("/api/harmony/dice-chords", {
+    method: "POST",
+    body: JSON.stringify({
+      key: $("#key")?.value || "F minor",
+      style: ($("#style")?.value || "").trim(),
+      avoid_recipe_id: state.progression?.recipe_id || null,
+      locked: false,
+      tracks: harmonyTracksPayload(),
+    }),
+  });
+  state.progression = res.progression;
+  const ids = applyHarmonyMidi(res.midi || {});
+  console.info("Theme apply", res.progression?.recipe_id, ids);
+  renderThemePanel();
+  const label =
+    res.progression?.label || formatRomans(res.progression) || "theme";
+  if (!ids.length) {
+    setStatus(`Theme · ${label} · Add a Bass or Pad track to hear voicings`);
+    return;
+  }
+  const who = rewrittenRoleLabels(ids).join(", ") || ids.join(", ");
+  setStatus(`Theme · ${label} · rewrote ${who} · bouncing…`);
+}
+
+function toggleThemeLock() {
+  if (!state.progression) {
+    setStatus("No theme — Dice chords first");
+    return;
+  }
+  pushUndo(state.progression.locked ? "Unlock theme" : "Lock theme");
+  state.progression.locked = !state.progression.locked;
+  renderThemePanel();
+  setStatus(state.progression.locked ? "Theme locked" : "Theme unlocked");
+}
+
+function initThemePanel() {
+  $("#btn-dice-chords")?.addEventListener("click", () => {
+    diceChords().catch((e) => setStatus(`Dice chords failed: ${e.message}`));
+  });
+  $("#btn-theme-lock")?.addEventListener("click", () => toggleThemeLock());
+  renderThemePanel();
+}
+
+async function rekeyAllMidi() {
   if (!window.MidiEngine) return;
   const key = $("#key")?.value || "F minor";
+  if (state.progression) {
+    const res = await api("/api/harmony/apply", {
+      method: "POST",
+      body: JSON.stringify({
+        key,
+        progression: cloneProgression(state.progression),
+        tracks: harmonyTracksPayload(),
+      }),
+    });
+    if (res.progression) state.progression = res.progression;
+    const ids = applyHarmonyMidi(res.midi || {});
+    const rewritten = new Set(ids);
+    const minor = tonicMinorLabel(key);
+    for (const id of activeTrackIds()) {
+      const midi = state.slots[id]?.midi;
+      if (!midi || rewritten.has(id)) continue;
+      midi.key = minor;
+      applySlot(id, { ...state.slots[id] });
+      if (midiEditors[id]) {
+        midiEditors[id].draft = { ...midiEditors[id].draft, ...cloneMidi(midi) };
+        renderMidiEditor(id);
+      }
+      if (isPlaying && isSerumTrack(id)) {
+        refreshPlayingTrack(id, { keepOldUntilReady: true }).catch((e) =>
+          console.warn(`theme rekey ${id}:`, e)
+        );
+      }
+    }
+    console.info("Theme apply", state.progression?.recipe_id, ids);
+    renderThemePanel();
+    return;
+  }
   for (const role of activeTrackIds()) {
     if (state.slots[role]?.midi) {
       state.slots[role].midi.key = key;
@@ -4294,12 +4463,15 @@ function commitMidiDraft(role, opts = {}) {
 
 function initMidiEditorUi() {
   $("#key")?.addEventListener("change", () => {
-    rekeyAllMidi();
-    for (const role of Object.keys(midiEditors)) {
-      renderMidiEditor(role);
-    }
-    // Lead/bass samples tagged with a key retune to the new session root
-    if (isPlaying) retuneWarpedSources();
+    Promise.resolve(rekeyAllMidi())
+      .catch((e) => setStatus(`Theme apply failed: ${e.message}`))
+      .finally(() => {
+        for (const role of Object.keys(midiEditors)) {
+          renderMidiEditor(role);
+        }
+        // Lead/bass samples tagged with a key retune to the new session root
+        if (isPlaying) retuneWarpedSources();
+      });
   });
 }
 
@@ -5905,6 +6077,7 @@ function bindExportDragAll() {
 
 async function init() {
   initUiChrome();
+  initThemePanel();
   initMidiEditorUi();
   initWaveOverview();
   initBottomTips();
