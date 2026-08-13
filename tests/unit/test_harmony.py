@@ -7,7 +7,9 @@ from fastapi import HTTPException
 from backend.app import (
     ApplyHarmonyRequest,
     DiceChordsRequest,
+    DiceLeadRequest,
     api_dice_chords,
+    api_dice_lead,
     api_harmony_apply,
     api_harmony_recipes,
 )
@@ -17,8 +19,10 @@ from backend.harmony import (
     apply_harmony,
     apply_key,
     dice_chords,
+    dice_lead,
     dice_lead_grid,
     harmony_role,
+    pc_to_degree_alter,
     pick_recipe,
     realize,
     rewrite_bass_grid,
@@ -173,6 +177,67 @@ def test_dice_lead_avoid_moves_bar_start():
     assert bar0[0]["midi"] % 12 != 5
 
 
+def _is_downbeat(start_beat: float) -> bool:
+    return abs(start_beat - round(start_beat)) < 1e-6
+
+
+def test_dice_lead_downbeats_are_chord_tones():
+    prog = realize("i_iv_VI_V", "F minor")
+    for seed in range(20):
+        midi = dice_lead_grid(prog, "F minor", seed=seed, octave=4)
+        notes = _lead_notes(midi, 4)
+        assert notes
+        for n in notes:
+            if not _is_downbeat(n["start_beat"]):
+                continue
+            bar = int(n["start_beat"] // 4)
+            assert n["midi"] % 12 in prog["chords"][bar]["pcs"]
+
+
+def test_dice_lead_passing_tones_are_aeolian():
+    prog = realize("i_VI_III_VII", "F minor")
+    key = prog["key"]
+    passing = 0
+    for seed in range(30):
+        midi = dice_lead_grid(prog, "F minor", seed=seed, octave=4)
+        for n in _lead_notes(midi, 4):
+            if _is_downbeat(n["start_beat"]):
+                continue
+            bar = int(n["start_beat"] // 4)
+            pc = n["midi"] % 12
+            if pc in prog["chords"][bar]["pcs"]:
+                continue
+            passing += 1
+            _deg, alter = pc_to_degree_alter(pc, key)
+            assert alter == 0
+    assert passing > 0
+
+
+def test_dice_lead_per_track_octave():
+    prog = realize("i_VI_III_VII", "C major")
+    out = dice_lead(
+        key="C major",
+        progression=prog,
+        tracks=[
+            {"id": "lead", "type": "lead", "octave": 4},
+            {"id": "lead2", "type": "arp", "octave": 5},
+            {"id": "bass", "type": "bass", "octave": 2},
+        ],
+        seed=1,
+    )
+    assert "bass" not in out["midi"]
+    assert "progression" not in out
+    assert out["midi"]["lead"]["octave"] == 4
+    assert out["midi"]["lead2"]["octave"] == 5
+    n4 = _lead_notes(out["midi"]["lead"], 4)
+    n5 = _lead_notes(out["midi"]["lead2"], 5)
+    lo4 = degree_to_midi("C minor", 0, 4)
+    lo5 = degree_to_midi("C minor", 0, 5)
+    assert lo4 == 60 and lo5 == 72
+    assert n4 and all(lo4 <= n["midi"] <= lo4 + 14 for n in n4)
+    assert n5 and all(lo5 <= n["midi"] <= lo5 + 14 for n in n5)
+
+
 def test_apply_key_keeps_recipe_and_locked():
     prog = realize("i_VI_III_VII", "F minor")
     prog["locked"] = True
@@ -273,3 +338,69 @@ def test_apply_rejects_wrong_bars():
         raise AssertionError("expected 400")
     except HTTPException as exc:
         assert exc.status_code == 400
+
+
+def test_dice_lead_no_progression_400():
+    try:
+        api_dice_lead(DiceLeadRequest(key="F minor", progression={}, tracks=[]))
+        raise AssertionError("expected 400")
+    except HTTPException as exc:
+        assert exc.status_code == 400
+
+
+def test_dice_lead_wrong_bars_400():
+    try:
+        api_dice_lead(
+            DiceLeadRequest(
+                key="F minor",
+                progression={"recipe_id": "i_VI_III_VII", "bars": 8, "chords": []},
+                tracks=[],
+            )
+        )
+        raise AssertionError("expected 400")
+    except HTTPException as exc:
+        assert exc.status_code == 400
+
+
+def test_dice_lead_no_lead_tracks_empty_midi():
+    prog = realize("i_VI_III_VII", "F minor")
+    out = dice_lead(
+        key="F minor",
+        progression=prog,
+        tracks=[{"id": "bass", "type": "bass", "octave": 2}],
+    )
+    assert out["midi"] == {}
+    assert "progression" not in out
+
+
+def test_dice_lead_locked_theme_allowed():
+    prog = realize("i_VI_III_VII", "F minor")
+    prog["locked"] = True
+    out = api_dice_lead(
+        DiceLeadRequest(
+            key="F minor",
+            progression=prog,
+            tracks=[
+                {
+                    "id": "lead",
+                    "type": "lead",
+                    "octave": 4,
+                    "midi": {
+                        "source": "user",
+                        "key": "F minor",
+                        "bars": 1,
+                        "grid": [None] * 16,
+                    },
+                }
+            ],
+            seed=0,
+        )
+    )
+    assert out["ok"] is True
+    lead = out["midi"]["lead"]
+    assert lead["patternId"] == "prog-lead"
+    assert lead["source"] == "progression"
+    assert lead["bars"] == 4
+    assert lead["octave"] == 4
+    assert lead["key"] == "F minor"
+    assert len(lead["grid"]) == 64

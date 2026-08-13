@@ -858,3 +858,40 @@ def apply_harmony(
             continue
         midi_out[tid] = _restamp_lead(midi, prog, _track_octave(track, 4))
     return {"progression": prog, "midi": midi_out}
+
+
+def dice_lead(
+    *,
+    key: str,
+    progression: dict[str, Any],
+    tracks: list[dict[str, Any]] | None = None,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """Rewrite lead-role MIDI over the current progression. Does not mutate it."""
+    tracks = list(tracks or [])
+    if not isinstance(progression, dict) or not progression:
+        raise ValueError("progression required")
+    bars = progression.get("bars")
+    if bars is not None and int(bars) != BARS:
+        raise ValueError("progression bars must be 4")
+    chords = progression.get("chords")
+    if not isinstance(chords, list) or len(chords) != BARS:
+        raise ValueError("progression bars must be 4")
+    _validate_track_grids(tracks)
+    midi_out: dict[str, Any] = {}
+    for track in tracks:
+        if not isinstance(track, dict):
+            continue
+        tid = str(track.get("id") or "").strip()
+        if not tid:
+            continue
+        if harmony_role(track.get("type") or tid) != "lead":
+            continue
+        midi_out[tid] = dice_lead_grid(
+            progression,
+            key,
+            seed=seed,
+            octave=_track_octave(track, 4),
+            avoid=_track_midi(track),
+        )
+    return {"midi": midi_out}

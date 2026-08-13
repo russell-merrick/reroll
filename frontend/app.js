@@ -239,7 +239,12 @@ function renderThemePanel() {
   if (diceBtn) diceBtn.disabled = locked;
 
   const leadBtn = $("#btn-dice-lead");
-  if (leadBtn) leadBtn.disabled = true;
+  if (leadBtn) {
+    const hasLead = activeTrackIds().some(
+      (id) => isSerumTrack(id) && harmonyRole(baseType(id)) === "lead"
+    );
+    leadBtn.disabled = !prog || !hasLead;
+  }
 }
 
 function newTrackId(type) {
@@ -2991,9 +2996,40 @@ function toggleThemeLock() {
   setStatus(state.progression.locked ? "Theme locked" : "Theme unlocked");
 }
 
+async function diceLead() {
+  if (!state.progression) {
+    setStatus("No theme — Dice chords first");
+    return;
+  }
+  const res = await api("/api/harmony/dice-lead", {
+    method: "POST",
+    body: JSON.stringify({
+      key: $("#key")?.value || "F minor",
+      style: ($("#style")?.value || "").trim(),
+      progression: cloneProgression(state.progression),
+      tracks: harmonyTracksPayload(),
+    }),
+  });
+  const midi = res.midi || {};
+  const ids = Object.keys(midi);
+  if (!ids.length) {
+    setStatus("Theme · no lead — Add a Lead (Serum) track to dice a topline");
+    return;
+  }
+  pushUndo("Dice lead");
+  applyHarmonyMidi(midi);
+  console.info("Theme lead", state.progression?.recipe_id, ids);
+  const label =
+    state.progression?.label || formatRomans(state.progression) || "theme";
+  setStatus(`Theme · ${label} · rewrote lead · bouncing…`);
+}
+
 function initThemePanel() {
   $("#btn-dice-chords")?.addEventListener("click", () => {
     diceChords().catch((e) => setStatus(`Dice chords failed: ${e.message}`));
+  });
+  $("#btn-dice-lead")?.addEventListener("click", () => {
+    diceLead().catch((e) => setStatus(`Dice lead failed: ${e.message}`));
   });
   $("#btn-theme-lock")?.addEventListener("click", () => toggleThemeLock());
   renderThemePanel();
@@ -4640,6 +4676,7 @@ function bindSlotElement(art) {
     // Changing type filter also becomes the catalog type for dice
     state.slots[role].type = v === "any" ? type : v;
     art.dataset.type = state.slots[role].type;
+    renderThemePanel();
     setStatus(`${role} · type ${String(v).toUpperCase()}`);
   });
 
@@ -4698,6 +4735,7 @@ function addTrack(type, { silent = false } = {}) {
   list?.appendChild(art);
   bindSlotElement(art);
   if (isSerumTrack(id)) ensureSlotMidi(id);
+  renderThemePanel();
   const themed = applyThemeToTrack(id);
   if (!silent) {
     setStatus(`Added ${t} track`);
@@ -4719,6 +4757,7 @@ function removeTrack(id) {
   state.trackOrder = state.trackOrder.filter((x) => x !== id);
   delete state.slots[id];
   $(`.slot[data-role="${id}"]`)?.remove();
+  renderThemePanel();
   setStatus(`Removed track · Ctrl+Z to undo`);
 }
 
@@ -4795,7 +4834,7 @@ function readInstrumentsFromDom() {
   }
 }
 
-/** Deep clone of slot MIDI — full contract (bars/source/locked/alter/voices). */
+/** Deep clone of slot MIDI — full contract (bars/source/locked/alter/oct/voices). */
 function cloneMidi(midi) {
   if (!midi || typeof midi !== "object") return null;
   return {
@@ -4814,6 +4853,7 @@ function cloneMidi(midi) {
             vel: c.vel,
           };
           if (c.alter) cell.alter = c.alter;
+          if (c.oct != null) cell.oct = c.oct;
           if (Array.isArray(c.voices) && c.voices.length) {
             cell.voices = c.voices.map((v) => ({ ...v }));
           }

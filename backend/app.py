@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from .catalog import CATALOG
 from .export_loop import export_loop
 from .generate import catalog_style_suggestions, generate_loop, generate_tracks, reroll_slot
-from .harmony import RECIPES, apply_harmony, dice_chords
+from .harmony import RECIPES, apply_harmony, dice_chords, dice_lead
 from .persist import catalog_stats, default_db_path, load_catalog, save_catalog
 from .scanner import DEFAULT_SAMPLE_ROOTS, DEFAULT_SERUM_ROOTS, scan_library
 from .timing import LOOP_BARS
@@ -186,6 +186,14 @@ class ApplyHarmonyRequest(BaseModel):
     key: str = "F minor"
     progression: dict[str, Any]
     tracks: list[HarmonyTrack] = Field(default_factory=list)
+
+
+class DiceLeadRequest(BaseModel):
+    key: str = "F minor"
+    style: str = ""
+    progression: dict[str, Any]
+    tracks: list[HarmonyTrack] = Field(default_factory=list)
+    seed: int | None = None
 
 
 class UserSettings(BaseModel):
@@ -537,6 +545,22 @@ def api_harmony_apply(body: ApplyHarmonyRequest) -> dict[str, Any]:
             key=body.key,
             progression=body.progression,
             tracks=_harmony_track_dicts(body.tracks),
+        )
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, **result}
+
+
+@app.post("/api/harmony/dice-lead")
+def api_dice_lead(body: DiceLeadRequest) -> dict[str, Any]:
+    if not body.progression:
+        raise HTTPException(status_code=400, detail="progression required")
+    try:
+        result = dice_lead(
+            key=body.key,
+            progression=body.progression,
+            tracks=_harmony_track_dicts(body.tracks),
+            seed=body.seed,
         )
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
