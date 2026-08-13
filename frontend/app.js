@@ -4767,6 +4767,9 @@ function initDefaultTracks() {
   state.slots = {};
   trackSeq = 0;
   state.progression = null;
+  // New stack, not an overwrite of the previous themed save.
+  state.currentLoopId = null;
+  state.currentLoopName = null;
   renderThemePanel();
   ensureInstrumentsState();
   const types = getDefaultTrackTypes();
@@ -5190,6 +5193,7 @@ function applyLoadedLoop(doc) {
   const list = $("#slot-list");
   if (!list) return;
   pushUndo("Load loop");
+  state.progression = null;
   stopAll();
   closeAllMidiEditors();
   bufferCache.clear();
@@ -5290,13 +5294,12 @@ function applyLoadedLoop(doc) {
     syncSoloUi(id);
   }
 
-  state.currentLoopId = doc.id || null;
-  state.currentLoopName = doc.name || null;
-
   if (!order.length) {
     initDefaultTracks();
   }
-  // After tracks (initDefaultTracks clears theme). Missing key → — no theme —.
+  // After tracks (initDefaultTracks clears theme + loop id). Missing key → — no theme —.
+  state.currentLoopId = doc.id || null;
+  state.currentLoopName = doc.name || null;
   state.progression = cloneProgression(doc.progression);
   renderThemePanel();
 }
@@ -5335,6 +5338,7 @@ async function refreshLoopsList() {
       item.key || null,
       item.style || null,
       item.track_count != null ? `${item.track_count} trk` : null,
+      item.has_progression ? "theme" : null,
       formatSavedAt(item.saved_at),
     ]
       .filter(Boolean)
