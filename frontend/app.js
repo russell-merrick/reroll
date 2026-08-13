@@ -3443,7 +3443,8 @@ function isPadOrVoicesEditor(role, cell) {
 function voicesFromProgressionBar(barIndex, octave, keyStr) {
   const chord = state.progression?.chords?.[barIndex];
   if (!chord || !window.MidiEngine) return null;
-  const key = keyStr || state.progression.key || "F minor";
+  // Always Aeolian-of-tonic — ignore session / draft major quality.
+  const key = state.progression.key || keyStr || "F minor";
   const pcs = Array.isArray(chord.pcs) ? chord.pcs : [];
   if (!pcs.length) {
     return [{ degree: chord.root_degree ?? 0, oct: octave, vel: 90 }];
@@ -4188,6 +4189,7 @@ function onMidiCellPointerDown(role, step, ev) {
     if (voices && voices.length) {
       const start = bar * 16;
       MidiEngine.placeVoices(grid, start, voices, 16, 90);
+      if (state.progression?.key) ed.draft.key = state.progression.key;
       markMidiUser(role);
       renderMidiEditor(role);
       commitMidiDraft(role);

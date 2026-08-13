@@ -52,10 +52,10 @@ function degreeToMidi(keyStr, degree, octave = 3, alter = 0) {
   return (octave + 1) * 12 + root + interval + (Number(alter) || 0);
 }
 
-/** Map a pitch class to (scale degree 0–6, semitone alter) in `keyStr`. */
+/** Map a pitch class to (Aeolian degree 0–6, semitone alter). Quality is ignored. */
 function pcToDegreeAlter(pc, keyStr) {
-  const { root, quality } = parseKey(keyStr);
-  const ints = scaleDegrees(quality);
+  const { root } = parseKey(keyStr);
+  const ints = SCALE_INTERVALS.minor;
   const rel = (((Number(pc) - root) % 12) + 12) % 12;
   for (let deg = 0; deg < ints.length; deg++) {
     if (ints[deg] === rel) return { degree: deg, alter: 0 };
