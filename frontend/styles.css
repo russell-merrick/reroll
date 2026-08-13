@@ -428,11 +428,17 @@ html[data-theme="rainbow"] .slot.serum {
 
 .options-instruments {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
 }
 
-@media (max-width: 560px) {
+@media (max-width: 720px) {
+  .options-instruments {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 480px) {
   .options-instruments {
     grid-template-columns: 1fr;
   }
@@ -440,7 +446,26 @@ html[data-theme="rainbow"] .slot.serum {
 
 .options-instruments .options-row {
   margin-bottom: 0;
-  padding: 8px 10px;
+  padding: 6px 8px;
+  gap: 8px;
+}
+
+.options-misc {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+@media (max-width: 480px) {
+  .options-misc {
+    grid-template-columns: 1fr;
+  }
+}
+
+.options-misc .options-row {
+  margin-bottom: 0;
+  padding: 6px 8px;
+  gap: 8px;
 }
 
 .options-row {
@@ -496,39 +521,37 @@ html[data-theme="rainbow"] .slot.serum {
   border-radius: var(--radius);
 }
 
-/* Theme panel — session-level 4-bar progression */
-.theme {
+.theme-inline {
+  min-width: 0;
+}
+
+.theme-inline-row {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 10px 14px;
-  padding: 10px 16px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  gap: 6px;
 }
 
-.theme.locked {
-  border-color: var(--accent-dim);
+.theme-inline.locked .theme-romans {
   box-shadow: inset 0 0 0 1px var(--accent-glow);
-}
-
-.theme-label {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-faint);
+  border-radius: 8px;
 }
 
 .theme-romans {
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 180px;
+  gap: 4px;
+}
+
+.theme-inline .icon-btn.lock {
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
 }
 
 .theme-roman {
+  appearance: none;
+  font: inherit;
+  cursor: pointer;
   min-width: 2.6em;
   text-align: center;
   padding: 6px 10px;
@@ -538,6 +561,12 @@ html[data-theme="rainbow"] .slot.serum {
   color: var(--text);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.theme-roman:disabled {
+  cursor: default;
+  opacity: 0.7;
 }
 
 .theme-roman.empty {
@@ -551,6 +580,49 @@ html[data-theme="rainbow"] .slot.serum {
   background: rgba(110, 231, 183, 0.14);
   color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent-glow);
+}
+
+.theme-roman.muted {
+  opacity: 0.38;
+  text-decoration: line-through;
+  color: var(--text-faint);
+}
+
+.theme-roman.muted.on {
+  opacity: 0.7;
+}
+
+.theme-chord-picker {
+  position: fixed;
+  z-index: 80;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(2.4em, 1fr));
+  gap: 4px;
+  padding: 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.theme-chord-opt {
+  appearance: none;
+  font: inherit;
+  font-weight: 600;
+  min-width: 2.4em;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.theme-chord-opt:hover,
+.theme-chord-opt.current {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  background: rgba(110, 231, 183, 0.12);
 }
 
 .theme-meta {
@@ -575,6 +647,56 @@ html[data-theme="rainbow"] .slot.serum {
 .theme-actions .icon-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.theme-lead-shape,
+.midi-shape {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  flex: 1 1 100%;
+  align-items: flex-end;
+}
+
+.midi-shape {
+  padding: 4px 0 10px;
+}
+
+.theme-slider {
+  min-width: 140px;
+  flex: 1;
+  max-width: 260px;
+}
+
+.theme-slider > span:first-child {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.theme-slider output {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.theme-slider-ends {
+  display: flex;
+  justify-content: space-between;
+  margin-top: -2px;
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+
+.theme-slider-ends i {
+  font-style: normal;
+}
+
+.theme-slider input[type="range"] {
+  width: 100%;
 }
 
 .field {
@@ -1097,6 +1219,11 @@ html[data-theme="rainbow"] .slot.serum {
 .slot-body {
   min-width: 0; /* allow shrink so long names/meta ellipsis instead of shoving icons */
   overflow: hidden;
+}
+
+.slot.serum .slot-body {
+  cursor: pointer;
+  user-select: none;
 }
 
 .slot-name {
@@ -2880,34 +3007,26 @@ dialog:has(.dialog-card-wide) {
 
 .midi-bar-pager {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   margin: 0 0 10px;
 }
 
-.midi-bar-pager[hidden],
-.midi-roman-strip[hidden] {
+.midi-bar-pager[hidden] {
   display: none;
 }
 
-.midi-bar-label {
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-faint);
-  margin-right: 2px;
-}
-
 .midi-bar-btn {
-  min-width: 28px;
-  height: 26px;
-  padding: 0 8px;
+  min-width: 5.5em;
+  height: 32px;
+  padding: 0 10px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--bg-slot);
   color: var(--text-dim);
   font: inherit;
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 600;
   cursor: pointer;
 }
@@ -2923,34 +3042,9 @@ dialog:has(.dialog-card-wide) {
   color: var(--accent);
 }
 
-.midi-roman-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 4px;
-  margin: 0 0 10px;
-}
-
-.midi-roman {
-  min-height: 28px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text-dim);
-  font: inherit;
-  font-size: 0.75rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.midi-roman:hover {
-  border-color: var(--border-strong);
-}
-
-.midi-roman.on {
-  border-color: var(--accent-dim);
-  background: rgba(110, 231, 183, 0.14);
-  color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent-glow);
+.midi-bar-btn.muted {
+  opacity: 0.4;
+  text-decoration: line-through;
 }
 
 .midi-grid-wrap {
@@ -3076,18 +3170,6 @@ dialog:has(.dialog-card-wide) {
 
 .midi-help {
   margin: 10px 0 8px;
-}
-
-.midi-preview-line {
-  font-family: var(--mono);
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  background: var(--bg);
-  border-radius: 6px;
-  padding: 8px 10px;
-  min-height: 2.4em;
-  margin-bottom: 12px;
-  word-break: break-word;
 }
 
 /* Serum macros (inside MIDI section only) */

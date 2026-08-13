@@ -1,7 +1,7 @@
 {
   "bpm": 140,
   "key": "F minor",
-  "style": "No preference",
+  "style": "Techno",
   "filterRisers": true,
   "filterFactorySerum": false,
   "kidTime": false,
@@ -9,10 +9,11 @@
   "serum2": true,
   "instruments": {
     "kick": true,
-    "hats": true,
-    "clap": true,
-    "lead_audio": true,
+    "hats": false,
+    "clap": false,
+    "lead_audio": false,
     "bass": true,
+    "lead": false,
     "bass_audio": false,
     "brass": false,
     "chorus": false,

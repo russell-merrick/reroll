@@ -177,18 +177,11 @@ def is_generic_macro_label(name: str | None) -> bool:
 
 
 def is_mapped_macro_name(name: str | None, *, engine: EngineKind = "serum1") -> bool:
-    """
-    Serum 1: hide default MACRO 1–4 labels (unmapped).
-    Serum 2: show knobs even with stock labels (S2 host rarely exposes renames).
-    Custom names always count as mapped.
-    """
+    """True only when the preset renamed the knob. Stock 'MACRO 6' is unused."""
     n = (name or "").strip()
     if not n:
         return False
-    if is_generic_macro_label(n):
-        # Serum 2: still show default Macro N knobs when VST names are stock
-        return engine == "serum2"
-    return True
+    return not is_generic_macro_label(n)
 
 
 def read_serum2_macros_from_preset(preset_path: str | Path | None) -> list[dict[str, Any]]:
@@ -263,11 +256,17 @@ def apply_serum2_preset_macro_labels(
         if not fm:
             out.append(m)
             continue
-        name = (fm.get("name") or "").strip()
+        name = (fm.get("name") or "").strip() or str(m.get("name") or "").strip()
+        mapped = bool(name) and not is_generic_macro_label(name)
         if not name:
-            out.append(m)
+            out.append({**m, "mapped": False})
             continue
-        updated = {**m, "name": name, "mapped": True, "name_source": "preset"}
+        updated = {
+            **m,
+            "name": name,
+            "mapped": mapped,
+            "name_source": "preset",
+        }
         # Prefer live plugin value; fall back to preset kParamValue if missing
         if m.get("value") is None and fm.get("value") is not None:
             updated["value"] = fm["value"]

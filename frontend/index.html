@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Reroll — By Austin Russell</title>
-  <link rel="stylesheet" href="styles.css" />
+  <title>REROLL — By Austin Russell</title>
+  <link rel="stylesheet" href="styles.css?v=dblclick-midi" />
 </head>
 <body>
   <div class="app">
@@ -23,7 +23,7 @@
           </svg>
         </a>
         <div>
-          <h1>Reroll</h1>
+          <h1>REROLL</h1>
           <p class="tagline">By Austin Russell · Your collection, infinite ideas</p>
         </div>
       </div>
@@ -51,45 +51,33 @@
           <option>G major</option>
         </select>
       </label>
-      <label class="field grow">
+      <label class="field grow" id="style-field">
         <span>Style</span>
-        <input type="text" id="style" value="No preference" list="style-presets" placeholder="No preference = random · or pick from your library…" />
-        <datalist id="style-presets">
-          <option value="No preference" />
-        </datalist>
+        <select id="style">
+          <option>No preference</option>
+          <option>Melodic techno</option>
+          <option>Prog house</option>
+          <option>Trance</option>
+          <option selected>Techno</option>
+          <option>House</option>
+        </select>
       </label>
-      <button type="button" class="btn primary big" id="btn-generate" data-tip="Reroll unlocked tracks from your library (samples + Serum)">🎲 Reroll</button>
-    </section>
-
-    <section class="theme" id="theme-panel" aria-label="Theme">
-      <div class="theme-label">Theme</div>
-      <div class="theme-romans" id="theme-romans" aria-label="Progression">
-        <span class="theme-roman empty">— no theme —</span>
+      <div class="field theme-inline" id="theme-panel">
+        <span>Chords</span>
+        <div class="theme-inline-row">
+          <div class="theme-romans" id="theme-romans" aria-label="Progression">
+            <span class="theme-roman empty">—</span>
+          </div>
+          <button
+            type="button"
+            class="icon-btn lock"
+            id="btn-theme-lock"
+            aria-pressed="false"
+            data-tip="Lock chords — Reroll keeps this progression"
+          >🔓</button>
+        </div>
       </div>
-      <span class="theme-meta" id="theme-meta"></span>
-      <div class="theme-actions">
-        <button
-          type="button"
-          class="icon-btn lock"
-          id="btn-theme-lock"
-          aria-pressed="false"
-          data-tip="Lock theme — keep this progression"
-          disabled
-        >🔓 Lock</button>
-        <button
-          type="button"
-          class="btn"
-          id="btn-dice-chords"
-          data-tip="Dice a 4-bar chord recipe and rewrite bass / pad MIDI"
-        >🎲 Chords</button>
-        <button
-          type="button"
-          class="btn"
-          id="btn-dice-lead"
-          data-tip="Dice a lead over the current theme"
-          disabled
-        >🎲 Lead</button>
-      </div>
+      <button type="button" class="btn primary big" id="btn-generate" data-tip="Reroll sounds, chords, and bass (unlocked tracks / unlocked theme)">🎲 Reroll</button>
     </section>
 
     <!-- Full-width loop waveform + playhead (above Loop) -->
@@ -130,28 +118,30 @@
           <div class="options-instruments" id="opt-instruments" role="group" aria-label="Default instruments"></div>
         </div>
         <div class="options-group">
-          <div class="options-group-title" data-tip="Which engines Reroll / dice can pull presets from (global for all Serum tracks)">Serum library</div>
-          <label class="options-row" data-tip="Include Serum 1 (.fxp) presets when generating or dicing synth tracks">
-            <input type="checkbox" id="opt-serum1" checked />
-            <span class="options-label"><strong>Serum 1</strong></span>
-          </label>
-          <label class="options-row" data-tip="Include Serum 2 (.SerumPreset) presets when generating or dicing synth tracks">
-            <input type="checkbox" id="opt-serum2" checked />
-            <span class="options-label"><strong>Serum 2</strong></span>
-          </label>
-          <label class="options-row" data-tip="Skip stock banks (Serum 1 factory categories, Serum 2 Factory + S1 Presets). Only Splice and User presets remain.">
-            <input type="checkbox" id="opt-filter-factory-serum" />
-            <span class="options-label"><strong>Filter out factory presets</strong></span>
-          </label>
+          <div class="options-group-title" data-tip="Serum engines, sample filters, and extras">Misc options</div>
+          <div class="options-misc" role="group" aria-label="Misc options">
+            <label class="options-row" data-tip="Include Serum 1 (.fxp) presets when generating or dicing synth tracks">
+              <input type="checkbox" id="opt-serum1" checked />
+              <span class="options-label"><strong>Serum 1</strong></span>
+            </label>
+            <label class="options-row" data-tip="Include Serum 2 (.SerumPreset) presets when generating or dicing synth tracks">
+              <input type="checkbox" id="opt-serum2" checked />
+              <span class="options-label"><strong>Serum 2</strong></span>
+            </label>
+            <label class="options-row" data-tip="Skip stock banks (Serum 1 factory categories, Serum 2 Factory + S1 Presets). Only Splice and User presets remain.">
+              <input type="checkbox" id="opt-filter-factory-serum" />
+              <span class="options-label"><strong>Filter out factory presets</strong></span>
+            </label>
+            <label class="options-row" data-tip="Skip risers, builds/buildups, downlifters, uplifters, drum/snare rolls, sweeps, whooshes">
+              <input type="checkbox" id="opt-filter-risers" checked />
+              <span class="options-label"><strong>Filter out risers/builds</strong></span>
+            </label>
+            <label class="options-row" data-tip="Show Sierra, cats, unicorn, and barrel of monkeys buttons">
+              <input type="checkbox" id="opt-kid-time" />
+              <span class="options-label"><strong>Kid time</strong></span>
+            </label>
+          </div>
         </div>
-        <label class="options-row" data-tip="Skip risers, builds/buildups, downlifters, uplifters, drum/snare rolls, sweeps, whooshes">
-          <input type="checkbox" id="opt-filter-risers" checked />
-          <span class="options-label"><strong>Filter out risers/builds</strong></span>
-        </label>
-        <label class="options-row" data-tip="Show Sierra, cats, unicorn, and barrel of monkeys buttons">
-          <input type="checkbox" id="opt-kid-time" />
-          <span class="options-label"><strong>Kid time</strong></span>
-        </label>
         <div class="options-group">
           <div class="options-group-title" data-tip="Visual look of the app">Appearance</div>
           <div class="options-theme-row" data-tip="Color theme for the whole UI">
@@ -478,8 +468,8 @@
     </div>
   </dialog>
 
-  <script src="midi.js?v=64step-voices-3"></script>
+  <script src="midi.js?v=midi-shape"></script>
   <script src="harmony.js?v=theme-v1"></script>
-  <script src="app.js?v=harmony-persist-2"></script>
+  <script src="app.js?v=chord-lock"></script>
 </body>
 </html>

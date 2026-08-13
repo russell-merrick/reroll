@@ -32,6 +32,8 @@ const state = {
   currentLoopName: null,
   /** Session theme — empty until first Dice chords. */
   progression: null,
+  /** Top-bar lock: Reroll must not replace the chord progression. */
+  themeLocked: false,
 };
 
 const THEME_IDS = ["dark", "light", "neon", "rainbow"];
@@ -42,13 +44,13 @@ const THEME_IDS = ["dark", "light", "neon", "rainbow"];
  */
 const INSTRUMENT_DEFS = [
   { id: "kick", label: "Kick", type: "kick", defaultOn: true, tip: "Kick samples" },
-  { id: "hats", label: "Hats", type: "hats", defaultOn: true, tip: "Hi-hat samples" },
-  { id: "clap", label: "Clap", type: "clap", defaultOn: true, tip: "Clap / snare samples" },
+  { id: "hats", label: "Hats", type: "hats", defaultOn: false, tip: "Hi-hat samples" },
+  { id: "clap", label: "Clap", type: "clap", defaultOn: false, tip: "Clap / snare samples" },
   {
     id: "lead_audio",
     label: "Lead (audio)",
     type: "lead_audio",
-    defaultOn: true,
+    defaultOn: false,
     tip: "Lead / synth audio samples (not Serum)",
   },
   {
@@ -57,6 +59,13 @@ const INSTRUMENT_DEFS = [
     type: "bass",
     defaultOn: true,
     tip: "Serum bass presets + MIDI",
+  },
+  {
+    id: "lead",
+    label: "Lead (Serum)",
+    type: "lead",
+    defaultOn: false,
+    tip: "Serum lead presets + MIDI",
   },
   {
     id: "bass_audio",
@@ -189,11 +198,43 @@ function highlightThemeBar() {
   });
 }
 
+function isThemeLocked() {
+  return Boolean(state.themeLocked);
+}
+
+/** Stamp lock onto whatever progression object we adopt. */
+function setProgression(prog) {
+  if (!prog || typeof prog !== "object") {
+    state.progression = null;
+    return;
+  }
+  const next = cloneProgression(prog) || prog;
+  next.locked = isThemeLocked();
+  state.progression = next;
+}
+
+function setThemeLocked(on) {
+  state.themeLocked = Boolean(on);
+  if (state.progression) state.progression.locked = state.themeLocked;
+}
+
+function syncThemeLockFromProgression() {
+  state.themeLocked = Boolean(state.progression?.locked);
+}
+
+function updateGenerateTip() {
+  const btn = $("#btn-generate");
+  if (!btn) return;
+  btn.dataset.tip = isThemeLocked()
+    ? "Reroll sounds — chords stay locked"
+    : "Reroll sounds, chords, and bass (unlocked tracks / unlocked theme)";
+}
+
 function renderThemePanel() {
   const panel = $("#theme-panel");
   if (!panel) return;
   const prog = state.progression;
-  const locked = Boolean(prog?.locked);
+  const locked = isThemeLocked();
   panel.classList.toggle("locked", locked);
 
   const romansEl = $("#theme-romans");
@@ -208,10 +249,22 @@ function renderThemePanel() {
     } else {
       const bar = themePlayBar();
       for (let i = 0; i < 4; i++) {
-        const cell = document.createElement("span");
-        cell.className = "theme-roman" + (isPlaying && i === bar ? " on" : "");
+        const cell = document.createElement("button");
+        cell.type = "button";
+        const muted = chords[i]?.enabled === false;
+        cell.className =
+          "theme-roman" +
+          (isPlaying && i === bar ? " on" : "") +
+          (muted ? " muted" : "");
         cell.dataset.bar = String(i);
         cell.textContent = chords[i]?.roman || "—";
+        cell.disabled = locked;
+        cell.dataset.tip = locked
+          ? "Chords locked — Reroll won't change these"
+          : muted
+            ? "Off — loop wraps to the first on chord · click to enable · hold to change"
+            : "Click to turn off (loop restarts) · hold to change chord";
+        bindThemeRomanCell(cell, i);
         romansEl.appendChild(cell);
       }
     }
@@ -226,20 +279,15 @@ function renderThemePanel() {
 
   const lockBtn = $("#btn-theme-lock");
   if (lockBtn) {
-    lockBtn.disabled = !prog;
+    lockBtn.disabled = false;
     lockBtn.classList.toggle("on", locked);
     lockBtn.setAttribute("aria-pressed", String(locked));
-    lockBtn.textContent = locked ? "🔒 Lock" : "🔓 Lock";
+    lockBtn.textContent = locked ? "🔒" : "🔓";
     lockBtn.dataset.tip = locked
-      ? "Unlock theme — allow Dice chords"
-      : "Lock theme — keep this progression";
+      ? "Unlock chords — Reroll may change the progression"
+      : "Lock chords — Reroll keeps this progression";
   }
-
-  const diceBtn = $("#btn-dice-chords");
-  if (diceBtn) diceBtn.disabled = locked;
-
-  const leadBtn = $("#btn-dice-lead");
-  if (leadBtn) leadBtn.disabled = !prog;
+  updateGenerateTip();
 }
 
 function newTrackId(type) {
@@ -901,6 +949,11 @@ function tipForButton(btn) {
       ? "Unsolo this track"
       : "Solo this track (mute others)";
   }
+  if (btn.id === "btn-theme-lock") {
+    return isThemeLocked()
+      ? "Unlock chords — Reroll may change the progression"
+      : "Lock chords — Reroll keeps this progression";
+  }
   if (btn.classList.contains("lock")) {
     return btn.classList.contains("on")
       ? "Unlock — allow Reroll to change this track"
@@ -909,7 +962,9 @@ function tipForButton(btn) {
   if (btn.classList.contains("dice")) return "Reroll this track only";
   if (btn.classList.contains("loop-delete")) return "Delete this saved loop";
   if (btn.classList.contains("delete")) return "Remove this track from the stack";
-  if (btn.classList.contains("serum-m")) return "Edit MIDI pattern";
+  if (btn.classList.contains("serum-m")) {
+    return "Edit MIDI pattern · or double-click the track";
+  }
   if (btn.classList.contains("serum-engine")) return "Serum engine filter (use Options)";
 
   return btn.getAttribute("aria-label") || "";
@@ -937,7 +992,7 @@ function initBottomTips() {
     ],
     [
       "#style",
-      "Soft lean for Reroll / dice. Suggestions come from your library packs. “No preference” / empty = true random",
+      "Leans Reroll picks and chord recipes. No preference = random",
     ],
   ].forEach(([sel, tip]) => {
     const el = $(sel);
@@ -1673,7 +1728,7 @@ function scheduleSynthNote(midi, when, durationSec, role, vel = 100) {
 
   osc.start(when);
   osc.stop(end + 0.02);
-  activeSources.push({ src: osc, gain });
+  activeSources.push({ src: osc, gain, role });
   osc.onended = () => {
     activeSources = activeSources.filter((s) => s.src !== osc);
   };
@@ -1726,6 +1781,40 @@ function stopSourcesForRole(role) {
     }
   }
   activeSources = keep;
+}
+
+/** Drop a track from the live graph so delete/mute-remove doesn't keep sounding. */
+function teardownPlayingTrack(role) {
+  if (!role) return;
+  trackRefreshGen[role] = (trackRefreshGen[role] || 0) + 1;
+  if (liveMidiRefreshTimers[role]) {
+    clearTimeout(liveMidiRefreshTimers[role]);
+    delete liveMidiRefreshTimers[role];
+  }
+  stopSourcesForRole(role);
+  const g = trackGains[role];
+  if (g) {
+    try {
+      if (audioCtx) {
+        const now = audioCtx.currentTime;
+        g.gain.cancelScheduledValues(now);
+        g.gain.setValueAtTime(0, now);
+      }
+      g.disconnect();
+    } catch {
+      /* ok */
+    }
+    delete trackGains[role];
+  }
+  delete scheduler.buffers[role];
+  delete scheduler.phraseRoles[role];
+  scheduler.playable = scheduler.playable.filter((r) => r !== role);
+  delete serumStemRoles[role];
+  delete serumStemMeta[role];
+  delete serumRefreshing[role];
+  delete serumPendingBuffer[role];
+  delete serumPendingJs[role];
+  markWaveDirty();
 }
 
 /**
@@ -2818,37 +2907,47 @@ function renderLibrary(summary) {
   if (summary.serum_categories) {
     populateSerumTypeSelects(summary.serum_categories);
   }
-  populateStylePresets(summary.styles);
 }
 
-/**
- * Fill Style datalist from catalog-inferred genres (top packs in this library).
- * Always keeps "No preference" first; free text still allowed.
- */
-function populateStylePresets(styles) {
-  const dl = $("#style-presets");
-  if (!dl) return;
-  const labels = [];
-  if (Array.isArray(styles)) {
-    for (const s of styles) {
-      const label = typeof s === "string" ? s : s?.label;
-      if (label && String(label).trim()) labels.push(String(label).trim());
+const STYLE_PRESETS = [
+  "No preference",
+  "Melodic techno",
+  "Prog house",
+  "Trance",
+  "Techno",
+  "House",
+];
+
+function normalizeStyleValue(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "No preference";
+  const hit = STYLE_PRESETS.find((p) => p.toLowerCase() === s.toLowerCase());
+  return hit || "No preference";
+}
+
+function setStyleValue(raw) {
+  const el = $("#style");
+  if (!el) return;
+  el.value = normalizeStyleValue(raw);
+}
+
+/** Open the Style list on click of the whole field (label included). */
+function bindStylePickerOpen() {
+  const el = $("#style");
+  const field = $("#style-field") || el?.closest(".field");
+  if (!el || !field) return;
+  field.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    el.focus();
+    if (typeof el.showPicker === "function") {
+      try {
+        el.showPicker();
+      } catch {
+        /* showPicker can throw if not from a user gesture / unsupported */
+      }
     }
-  }
-  dl.innerHTML = "";
-  const add = (value) => {
-    const opt = document.createElement("option");
-    opt.value = value;
-    dl.appendChild(opt);
-  };
-  add("No preference");
-  const seen = new Set(["no preference"]);
-  for (const label of labels) {
-    const key = label.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    add(label);
-  }
+  });
 }
 
 async function loadLibrary() {
@@ -2906,9 +3005,22 @@ function ensureSlotMidi(role) {
   return state.slots[role].midi;
 }
 
-function harmonyTracksPayload() {
+function midiShapeFrom(midi) {
+  const n = (v) => {
+    const x = Number(v);
+    return Number.isFinite(x) ? Math.min(1, Math.max(0, x)) : 0.5;
+  };
+  return {
+    density: n(midi?.density),
+    variance: n(midi?.variance),
+    length: n(midi?.length),
+  };
+}
+
+function harmonyTracksPayload(onlyId) {
   return activeTrackIds()
     .filter((id) => isSerumTrack(id))
+    .filter((id) => !onlyId || id === onlyId)
     .map((id) => {
       const s = state.slots[id] || {};
       return {
@@ -2916,6 +3028,7 @@ function harmonyTracksPayload() {
         type: baseType(id),
         midi: cloneMidi(s.midi),
         octave: s.midi?.octave ?? null,
+        ...midiShapeFrom(s.midi),
       };
     });
 }
@@ -2924,16 +3037,28 @@ function applyHarmonyMidi(midiMap) {
   const ids = Object.keys(midiMap || {});
   for (const id of ids) {
     if (!state.slots[id]) continue;
-    state.slots[id].midi = cloneMidi(midiMap[id]);
+    const keep = midiShapeFrom(state.slots[id].midi);
+    const next = cloneMidi(midiMap[id]);
+    if (next) Object.assign(next, keep);
+    state.slots[id].midi = next;
     applySlot(id, { ...state.slots[id] });
     if (midiEditors[id]) {
-      midiEditors[id].draft = { ...midiEditors[id].draft, ...cloneMidi(midiMap[id]) };
+      midiEditors[id].draft = {
+        ...midiEditors[id].draft,
+        ...cloneMidi(midiMap[id]),
+        ...keep,
+      };
       renderMidiEditor(id);
     }
     if (isPlaying) {
-      refreshPlayingTrack(id, { keepOldUntilReady: true }).catch((e) =>
-        console.warn(`theme refresh ${id}:`, e)
-      );
+      // Notes changed — drop the old stem on the next tick (JS synth)
+      // while the 4-bar bounce runs. keepOld would leave the previous
+      // progression audible for seconds and feel like a no-op.
+      beginProvisionalJsSynth(id);
+      refreshPlayingTrack(id, {
+        provisionalJs: true,
+        keepOldUntilReady: false,
+      }).catch((e) => console.warn(`theme refresh ${id}:`, e));
     }
   }
   return ids;
@@ -2950,30 +3075,31 @@ function rewrittenRoleLabels(ids) {
   return [...new Set(labels)];
 }
 
-async function diceChords() {
-  if (state.progression?.locked) {
-    setStatus("Theme locked — unlock to dice chords");
+async function diceChords(opts = {}) {
+  if (state.progression && isThemeLocked()) {
+    setStatus("Chords locked — unlock to reroll them");
     return;
   }
+  const tracks = harmonyTracksPayload();
   const res = await api("/api/harmony/dice-chords", {
     method: "POST",
     body: JSON.stringify({
       key: $("#key")?.value || "F minor",
       style: ($("#style")?.value || "").trim(),
       avoid_recipe_id: state.progression?.recipe_id || null,
-      locked: false,
-      tracks: harmonyTracksPayload(),
+      locked: Boolean(state.progression && isThemeLocked()),
+      tracks,
     }),
   });
-  pushUndo("Dice chords");
-  state.progression = res.progression;
+  if (!opts.skipUndo) pushUndo("Dice chords");
+  setProgression(res.progression);
   const ids = applyHarmonyMidi(res.midi || {});
   console.info("Theme apply", res.progression?.recipe_id, ids);
   renderThemePanel();
   const label =
     res.progression?.label || formatRomans(res.progression) || "theme";
   if (!ids.length) {
-    setStatus(`Theme · ${label} · Add a Bass or Pad track to hear voicings`);
+    setStatus(`Theme · ${label} · Add a Bass (Serum) track`);
     return;
   }
   const who = rewrittenRoleLabels(ids).join(", ") || ids.join(", ");
@@ -2981,17 +3107,46 @@ async function diceChords() {
 }
 
 function toggleThemeLock() {
+  pushUndo(isThemeLocked() ? "Unlock chords" : "Lock chords");
+  setThemeLocked(!isThemeLocked());
+  renderThemePanel();
+  setStatus(
+    isThemeLocked()
+      ? "Chords locked — Reroll keeps this progression"
+      : "Chords unlocked — Reroll may change them"
+  );
+}
+
+async function diceBass(opts = {}) {
   if (!state.progression) {
     setStatus("No theme — Dice chords first");
     return;
   }
-  pushUndo(state.progression.locked ? "Unlock theme" : "Lock theme");
-  state.progression.locked = !state.progression.locked;
-  renderThemePanel();
-  setStatus(state.progression.locked ? "Theme locked" : "Theme unlocked");
+  const res = await api("/api/harmony/dice-bass", {
+    method: "POST",
+    body: JSON.stringify({
+      key: $("#key")?.value || "F minor",
+      style: ($("#style")?.value || "").trim(),
+      progression: cloneProgression(state.progression),
+      tracks: harmonyTracksPayload(opts.trackId),
+    }),
+  });
+  const midi = res.midi || {};
+  const ids = Object.keys(midi);
+  if (!ids.length) {
+    setStatus("Theme · no bass — Add a Bass (Serum) track to dice a line");
+    return;
+  }
+  if (!opts.skipUndo) pushUndo("Dice bass");
+  applyHarmonyMidi(midi);
+  console.info("Theme bass", state.progression?.recipe_id, ids);
+  const label =
+    state.progression?.label || formatRomans(state.progression) || "theme";
+  const kind = String(midi[ids[0]]?.patternId || "").replace("prog-", "");
+  setStatus(`Theme · ${label} · bass ${kind || "line"} · bouncing…`);
 }
 
-async function diceLead() {
+async function diceLead(opts = {}) {
   if (!state.progression) {
     setStatus("No theme — Dice chords first");
     return;
@@ -3002,7 +3157,7 @@ async function diceLead() {
       key: $("#key")?.value || "F minor",
       style: ($("#style")?.value || "").trim(),
       progression: cloneProgression(state.progression),
-      tracks: harmonyTracksPayload(),
+      tracks: harmonyTracksPayload(opts.trackId),
     }),
   });
   const midi = res.midi || {};
@@ -3011,7 +3166,7 @@ async function diceLead() {
     setStatus("Theme · no lead — Add a Lead (Serum) track to dice a topline");
     return;
   }
-  pushUndo("Dice lead");
+  if (!opts.skipUndo) pushUndo("Dice lead");
   applyHarmonyMidi(midi);
   console.info("Theme lead", state.progression?.recipe_id, ids);
   const label =
@@ -3020,14 +3175,113 @@ async function diceLead() {
 }
 
 function initThemePanel() {
-  $("#btn-dice-chords")?.addEventListener("click", () => {
-    diceChords().catch((e) => setStatus(`Dice chords failed: ${e.message}`));
-  });
-  $("#btn-dice-lead")?.addEventListener("click", () => {
-    diceLead().catch((e) => setStatus(`Dice lead failed: ${e.message}`));
-  });
   $("#btn-theme-lock")?.addEventListener("click", () => toggleThemeLock());
+  document.addEventListener("pointerdown", (e) => {
+    const picker = $("#theme-chord-picker");
+    if (!picker || picker.contains(e.target)) return;
+    if (e.target?.closest?.(".theme-roman")) return;
+    closeThemeChordPicker();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeThemeChordPicker();
+  });
   renderThemePanel();
+}
+
+const THEME_ROMANS = ["i", "ii", "III", "iv", "v", "V", "VI", "VII"];
+let themeHoldTimer = null;
+let themeHoldOpened = false;
+
+function closeThemeChordPicker() {
+  $("#theme-chord-picker")?.remove();
+}
+
+function openThemeChordPicker(bar, anchor) {
+  closeThemeChordPicker();
+  const picker = document.createElement("div");
+  picker.id = "theme-chord-picker";
+  picker.className = "theme-chord-picker";
+  picker.setAttribute("role", "listbox");
+  const cur = state.progression?.chords?.[bar]?.roman;
+  for (const r of THEME_ROMANS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "theme-chord-opt" + (r === cur ? " current" : "");
+    btn.textContent = r;
+    btn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      closeThemeChordPicker();
+      editThemeChord({ bar, roman: r }).catch((e) =>
+        setStatus(`Set chord failed: ${e.message}`)
+      );
+    });
+    picker.appendChild(btn);
+  }
+  document.body.appendChild(picker);
+  const rect = anchor.getBoundingClientRect();
+  const left = Math.min(rect.left, window.innerWidth - picker.offsetWidth - 8);
+  picker.style.left = `${Math.max(8, left)}px`;
+  picker.style.top = `${rect.bottom + 4}px`;
+}
+
+function bindThemeRomanCell(cell, bar) {
+  cell.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    if (isThemeLocked()) return;
+    themeHoldOpened = false;
+    themeHoldTimer = setTimeout(() => {
+      themeHoldTimer = null;
+      themeHoldOpened = true;
+      openThemeChordPicker(bar, cell);
+    }, 400);
+  });
+  const finish = () => {
+    if (!themeHoldTimer) return;
+    clearTimeout(themeHoldTimer);
+    themeHoldTimer = null;
+    if (themeHoldOpened) return;
+    const chords = state.progression?.chords || [];
+    const on = chords[bar]?.enabled !== false;
+    const nOn = chords.filter((c) => c && c.enabled !== false).length;
+    if (on && nOn <= 1) {
+      setStatus("Keep at least one chord on");
+      return;
+    }
+    editThemeChord({ bar, enabled: !on }).catch((e) =>
+      setStatus(`Toggle chord failed: ${e.message}`)
+    );
+  };
+  cell.addEventListener("pointerup", finish);
+  cell.addEventListener("pointercancel", () => {
+    if (themeHoldTimer) clearTimeout(themeHoldTimer);
+    themeHoldTimer = null;
+  });
+}
+
+async function editThemeChord({ bar, roman, enabled }) {
+  if (!state.progression) return;
+  const res = await api("/api/harmony/set-chords", {
+    method: "POST",
+    body: JSON.stringify({
+      key: $("#key")?.value || "F minor",
+      progression: cloneProgression(state.progression),
+      tracks: harmonyTracksPayload(),
+      bar,
+      roman: roman ?? null,
+      enabled: enabled === undefined ? null : enabled,
+    }),
+  });
+  const label =
+    roman != null ? `Set chord · ${roman}` : enabled ? "Enable chord" : "Mute chord";
+  pushUndo(label);
+  setProgression(res.progression);
+  applyHarmonyMidi(res.midi || {});
+  renderThemePanel();
+  for (const id of Object.keys(midiEditors)) renderMidiEditor(id);
+  const shown =
+    res.progression?.label || formatRomans(res.progression) || "theme";
+  setStatus(`Theme · ${shown}`);
 }
 
 /** Write the current theme onto one new bass/pad (same recipe, still Aeolian). */
@@ -3050,7 +3304,7 @@ async function applyThemeToTrack(id) {
       ],
     }),
   });
-  if (res.progression) state.progression = res.progression;
+  if (res.progression) setProgression(res.progression);
   const ids = applyHarmonyMidi(res.midi || {});
   console.info("Theme apply", state.progression?.recipe_id, ids);
 }
@@ -3083,7 +3337,7 @@ async function rekeyAllMidi() {
     const entry = undoStack[undoStack.length - 1];
     if (entry?.snap) entry.snap.key = prevKey;
     rememberSessionKey(key);
-    if (res.progression) state.progression = res.progression;
+    if (res.progression) setProgression(res.progression);
     const ids = applyHarmonyMidi(res.midi || {});
     const rewritten = new Set(ids);
     const minor = tonicMinorLabel(key);
@@ -3362,9 +3616,7 @@ function applyUserSettings(s) {
     }
     rememberSessionKey(keyEl.value);
   }
-  if (s.style != null && $("#style")) {
-    $("#style").value = String(s.style);
-  }
+  if (s.style != null) setStyleValue(s.style);
   // Default ON when key omitted (first-run / older saves without the field)
   state.options.filterRisers =
     s.filterRisers === undefined || s.filterRisers === null
@@ -3505,7 +3757,16 @@ async function doGenerate(opts = {}) {
       applySlot(role, { ...state.slots[role], locked });
     }
   }
-  const summary = `Rerolled · ${loop.bpm} BPM · ${loop.key} · ${loop.style} · ${serumEngineLabel(eng)}`;
+  try {
+    if (!(state.progression && isThemeLocked())) {
+      await diceChords({ skipUndo: true });
+    }
+  } catch (e) {
+    console.warn("reroll theme:", e);
+  }
+  const summary = `Rerolled · ${loop.bpm} BPM · ${loop.key} · ${loop.style} · ${serumEngineLabel(eng)}${
+    isThemeLocked() ? " · chords locked" : ""
+  }`;
   if (!autoPlay) {
     setStatus(`${summary} — press Play`);
     return;
@@ -3731,21 +3992,19 @@ function buildMidiEditorElement(role) {
         </div>
       </header>
       <div class="midi-bar-pager" hidden>
-        <span class="midi-bar-label">Bar</span>
-        <button type="button" class="midi-bar-btn" data-bar="0">1</button>
-        <button type="button" class="midi-bar-btn" data-bar="1">2</button>
-        <button type="button" class="midi-bar-btn" data-bar="2">3</button>
-        <button type="button" class="midi-bar-btn" data-bar="3">4</button>
+        <button type="button" class="midi-bar-btn" data-bar="0">Bar 1: —</button>
+        <button type="button" class="midi-bar-btn" data-bar="1">Bar 2: —</button>
+        <button type="button" class="midi-bar-btn" data-bar="2">Bar 3: —</button>
+        <button type="button" class="midi-bar-btn" data-bar="3">Bar 4: —</button>
       </div>
-      <div class="midi-roman-strip" hidden></div>
       <div class="midi-toolbar">
         <label class="field">
           <span>Pattern</span>
           <select class="midi-pattern"></select>
         </label>
         <label class="field">
-          <span>Length</span>
-          <select class="midi-length" title="Default length for new notes"></select>
+          <span>Place</span>
+          <select class="midi-length" title="Default length for new notes you click in"></select>
         </label>
         <label class="field">
           <span>Octave</span>
@@ -3755,8 +4014,24 @@ function buildMidiEditorElement(role) {
           <span>Key</span>
           <input type="text" class="midi-key-display" readonly />
         </label>
-        <button type="button" class="btn ghost" data-action="next" data-tip="Next pattern in the dropdown list">Next pattern</button>
         <button type="button" class="btn ghost" data-action="clear" data-tip="Clear all steps">Clear</button>
+      </div>
+      <div class="midi-shape" hidden>
+        <label class="field theme-slider" data-tip="How many hits. Sparse = bounce / holes. Dense = 16th runner. Release to re-dice this track.">
+          <span>Density <output class="midi-density-out">50</output></span>
+          <input type="range" class="midi-density" min="0" max="100" value="50" />
+          <span class="theme-slider-ends"><i>sparse</i><i>dense</i></span>
+        </label>
+        <label class="field theme-slider" data-tip="How much bars 2–4 change. Release to re-dice this track.">
+          <span>Variance <output class="midi-variance-out">50</output></span>
+          <input type="range" class="midi-variance" min="0" max="100" value="50" />
+          <span class="theme-slider-ends"><i>repeat</i><i>vary</i></span>
+        </label>
+        <label class="field theme-slider" data-tip="Generated note length. Release to re-dice this track.">
+          <span>Length <output class="midi-length-out">50</output></span>
+          <input type="range" class="midi-hold" min="0" max="100" value="50" />
+          <span class="theme-slider-ends"><i>short</i><i>long</i></span>
+        </label>
       </div>
       <div class="midi-grid-wrap">
         <div class="midi-step-labels"></div>
@@ -3766,7 +4041,6 @@ function buildMidiEditorElement(role) {
         Click empty to place · click note to remove · Shift+click cycles degree (1–7).
         Drag the right edge of a note (or Alt+drag) to change length · monophonic.
       </p>
-      <div class="midi-preview-line mono midi-note-list"></div>
       <div class="midi-macros">
         <div class="midi-macros-head">
           <h3>Serum macros</h3>
@@ -3787,24 +4061,6 @@ function bindMidiEditorRoot(role, root) {
   on("close", () => closeMidiEditor(role));
   on("serum", () => {
     openSerumUi(role).catch((e) => setStatus(`Open Serum failed: ${e.message || e}`));
-  });
-  on("next", () => {
-    const ed = midiEditors[role];
-    const sel = $(".midi-pattern", root);
-    if (!ed || !window.MidiEngine || !sel) return;
-    const opts = [...sel.options].filter((o) => o.value && o.value !== "custom");
-    if (!opts.length) return;
-    const cur = ed.draft.patternId || sel.value;
-    let idx = opts.findIndex((o) => o.value === cur);
-    // From custom / unknown → start at first; else advance and wrap
-    idx = idx < 0 ? 0 : (idx + 1) % opts.length;
-    const id = opts[idx].value;
-    applyPatternToDraft(ed.draft, id);
-    sel.value = id;
-    if (state.slots[role]?.midi) state.slots[role].midi.source = "user";
-    renderMidiEditor(role);
-    commitMidiDraft(role);
-    setStatus(`Pattern · ${role} · ${opts[idx].textContent || id}`);
   });
   on("clear", () => {
     const ed = midiEditors[role];
@@ -3828,10 +4084,39 @@ function bindMidiEditorRoot(role, root) {
     commitMidiDraft(role);
   });
   root.querySelectorAll(".midi-bar-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    const bar = Number(btn.dataset.bar) || 0;
+    let holdTimer = null;
+    let held = false;
+    btn.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      held = false;
+      holdTimer = setTimeout(() => {
+        holdTimer = null;
+        held = true;
+        if (state.progression && !isThemeLocked()) {
+          openThemeChordPicker(bar, btn);
+        }
+      }, 400);
+    });
+    btn.addEventListener("pointerup", () => {
+      if (holdTimer) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+      }
+    });
+    btn.addEventListener("pointercancel", () => {
+      if (holdTimer) clearTimeout(holdTimer);
+      holdTimer = null;
+    });
+    btn.addEventListener("click", (e) => {
+      if (held) {
+        e.preventDefault();
+        held = false;
+        return;
+      }
       const ed = midiEditors[role];
       if (!ed) return;
-      ed.barIndex = Number(btn.dataset.bar) || 0;
+      ed.barIndex = bar;
       renderMidiEditor(role);
     });
   });
@@ -3842,20 +4127,68 @@ function bindMidiEditorRoot(role, root) {
     ed.draft.noteLength = Math.max(1, Math.min(16, Number(lenSel.value) || 2));
   });
   const oct = $(".midi-octave", root);
-  oct?.addEventListener("change", () => {
-    const ed = midiEditors[role];
-    if (!ed) return;
-    ed.draft.octave = Number(oct.value);
-    renderMidiEditor(role);
-    commitMidiDraft(role);
-  });
-  oct?.addEventListener("input", () => {
-    const ed = midiEditors[role];
-    if (!ed) return;
-    ed.draft.octave = Number(oct.value);
-    renderMidiEditor(role);
-    commitMidiDraft(role, { silent: true });
-  });
+  oct?.addEventListener("change", () => applyMidiOctave(role, Number(oct.value)));
+  oct?.addEventListener("input", () =>
+    applyMidiOctave(role, Number(oct.value), { silent: true })
+  );
+  bindMidiShapeSliders(role, root);
+}
+
+function slider01(el) {
+  const n = Number(el?.value);
+  return Number.isFinite(n) ? Math.min(1, Math.max(0, n / 100)) : 0.5;
+}
+
+function bindMidiShapeSliders(role, root) {
+  const bind = (sel, outSel, key) => {
+    const el = $(sel, root);
+    const out = $(outSel, root);
+    if (!el) return;
+    const sync = () => {
+      if (out) out.textContent = String(el.value);
+      const ed = midiEditors[role];
+      if (!ed?.draft) return;
+      ed.draft[key] = slider01(el);
+      if (state.slots[role]?.midi) state.slots[role].midi[key] = ed.draft[key];
+    };
+    el.addEventListener("input", sync);
+    el.addEventListener("change", () => {
+      sync();
+      if (!state.progression) return;
+      const hr = harmonyRole(baseType(role));
+      const run = hr === "bass" ? diceBass : hr === "lead" ? diceLead : null;
+      if (!run) return;
+      run({ trackId: role }).catch((e) =>
+        setStatus(`Dice ${hr} failed: ${e.message}`)
+      );
+    });
+  };
+  bind(".midi-density", ".midi-density-out", "density");
+  bind(".midi-variance", ".midi-variance-out", "variance");
+  bind(".midi-hold", ".midi-length-out", "length");
+}
+
+/** Move stored cell/voice octaves with the track octave so jumps don't stick. */
+function shiftMidiOctave(midi, delta) {
+  if (!midi || !delta || !Array.isArray(midi.grid)) return;
+  for (const cell of midi.grid) {
+    if (!cell || typeof cell !== "object") continue;
+    if (cell.oct != null) cell.oct = Number(cell.oct) + delta;
+    if (!Array.isArray(cell.voices)) continue;
+    for (const v of cell.voices) {
+      if (v && typeof v === "object" && v.oct != null) v.oct = Number(v.oct) + delta;
+    }
+  }
+}
+
+function applyMidiOctave(role, next, opts = {}) {
+  const ed = midiEditors[role];
+  if (!ed || !Number.isFinite(next)) return;
+  const prev = Number(ed.draft.octave);
+  if (Number.isFinite(prev) && next !== prev) shiftMidiOctave(ed.draft, next - prev);
+  ed.draft.octave = next;
+  renderMidiEditor(role);
+  commitMidiDraft(role, opts);
 }
 
 function closeMidiEditor(role) {
@@ -3970,6 +4303,12 @@ async function loadMacrosForEditor(role) {
   }
 }
 
+function isGenericMacroLabel(name) {
+  const n = String(name || "").trim();
+  if (!n) return true;
+  return /^macro\s*[1-8]$/i.test(n);
+}
+
 /** If error detail embeds a successful macros JSON blob, parse it. */
 function tryParseMacrosFromError(err) {
   const msg = String(err?.message || err || "");
@@ -3993,13 +4332,16 @@ function applyMacroResult(role, result) {
   const status = $(".midi-macros-status", ed.root);
   const mapped = Array.isArray(result.macros) ? result.macros : [];
   const all = Array.isArray(result.all_macros) ? result.all_macros : mapped;
+  const named = (mapped.length ? mapped : all).filter(
+    (m) => !isGenericMacroLabel(m?.name)
+  );
   const nSlots = Math.max(4, all.length, mapped.length, 8);
   const baseline = Array.from({ length: nSlots }, () => 0);
   for (const m of all) {
     const slot = Number(m.slot) || 0;
     if (slot >= 1 && slot <= nSlots) baseline[slot - 1] = max01(m.value ?? 0);
   }
-  ed.draft.macroMeta = mapped.map((m) => ({
+  ed.draft.macroMeta = named.map((m) => ({
     slot: Number(m.slot) || 1,
     name: m.name || `Macro ${m.slot}`,
     value: max01(m.value ?? 0),
@@ -4015,16 +4357,16 @@ function applyMacroResult(role, result) {
     }
   }
   wrap?.classList.remove("is-loading");
-  if (!mapped.length) {
+  if (!named.length) {
     wrap?.classList.add("is-empty");
-    if (status) status.textContent = "No macros mapped on this preset";
+    if (status) status.textContent = "No named macros on this preset";
   } else {
     wrap?.classList.remove("is-empty");
     if (status) {
       const loaded = result.fxp_loaded ? "preset loaded" : "preset load uncertain";
       status.textContent = ed.draft.macrosTouched
-        ? `${mapped.length} macro${mapped.length === 1 ? "" : "s"} · custom · ${loaded}`
-        : `${mapped.length} macro${mapped.length === 1 ? "" : "s"} · ${loaded}`;
+        ? `${named.length} macro${named.length === 1 ? "" : "s"} · custom · ${loaded}`
+        : `${named.length} macro${named.length === 1 ? "" : "s"} · ${loaded}`;
     }
   }
   renderMacroSliders(role);
@@ -4141,6 +4483,20 @@ function renderMidiEditor(role) {
   const oct = $(".midi-octave", root);
   if (oct) oct.value = String(draft.octave ?? MidiEngine.defaultOctave(midiRole));
 
+  const shapeRow = $(".midi-shape", root);
+  if (shapeRow) shapeRow.hidden = hr === "pad";
+  const shape = midiShapeFrom(draft);
+  const setShape = (sel, outSel, val) => {
+    const input = $(sel, root);
+    const out = $(outSel, root);
+    const pct = String(Math.round(val * 100));
+    if (input) input.value = pct;
+    if (out) out.textContent = pct;
+  };
+  setShape(".midi-density", ".midi-density-out", shape.density);
+  setShape(".midi-variance", ".midi-variance-out", shape.variance);
+  setShape(".midi-hold", ".midi-length-out", shape.length);
+
   const sel = $(".midi-pattern", root);
   if (sel && !sel.dataset.ready) {
     sel.innerHTML = "";
@@ -4172,29 +4528,12 @@ function renderMidiEditor(role) {
     pager.hidden = !is64;
     pager.querySelectorAll(".midi-bar-btn").forEach((btn) => {
       const b = Number(btn.dataset.bar) || 0;
+      const ch = state.progression?.chords?.[b];
+      const roman = ch?.roman || "—";
+      btn.textContent = `Bar ${b + 1}: ${roman}`;
       btn.classList.toggle("on", is64 && b === barIndex);
+      btn.classList.toggle("muted", ch?.enabled === false);
     });
-  }
-
-  const strip = $(".midi-roman-strip", root);
-  if (strip) {
-    strip.hidden = !is64;
-    if (is64) {
-      strip.innerHTML = "";
-      const chords = state.progression?.chords;
-      for (let i = 0; i < 4; i++) {
-        const cell = document.createElement("button");
-        cell.type = "button";
-        cell.className = "midi-roman" + (i === barIndex ? " on" : "");
-        cell.textContent = chords?.[i]?.roman || String(i + 1);
-        cell.addEventListener("click", () => {
-          if (!midiEditors[role]) return;
-          midiEditors[role].barIndex = i;
-          renderMidiEditor(role);
-        });
-        strip.appendChild(cell);
-      }
-    }
   }
 
   const help = $(".midi-help", root);
@@ -4277,7 +4616,12 @@ function renderMidiEditor(role) {
           btn.title = `${names.join("·")} · ${lengthLabel(noteLen)} — click cycles inversion`;
         } else {
           btn.textContent = names[0] || MidiEngine.midiToName(
-            MidiEngine.degreeToMidi(key, note.degree, draft.octave, note.alter || 0)
+            MidiEngine.degreeToMidi(
+              key,
+              note.degree,
+              note.oct ?? draft.octave,
+              note.alter || 0
+            )
           );
           btn.title = `deg ${note.degree + 1} · ${btn.textContent} · ${lengthLabel(noteLen)} — drag right edge to resize`;
         }
@@ -4305,22 +4649,6 @@ function renderMidiEditor(role) {
     }
   }
 
-  const notes = MidiEngine.gridToNotes(
-    draft.grid,
-    key,
-    draft.octave,
-    midiLoopBars(draft)
-  );
-  const list = $(".midi-note-list", root);
-  if (list) {
-    const inBar = notes.filter((n) => n.step >= offset && n.step < offset + 16);
-    if (!inBar.length) list.textContent = "(empty bar)";
-    else {
-      list.textContent = inBar
-        .map((n) => `${(n.step % 16) + 1}:${MidiEngine.midiToName(n.midi)}×${n.duration}`)
-        .join("  ");
-    }
-  }
 }
 
 /** True when pointer is on the right ~40% of a note's last cell (resize handle). */
@@ -4623,13 +4951,13 @@ function buildSlotElement(id, type) {
 
   const toolsHtml = serum
     ? `<div class="slot-serum-tools">
-        <button type="button" class="icon-btn serum-m" data-tip="Edit MIDI pattern" aria-label="MIDI editor">M</button>
+        <button type="button" class="icon-btn serum-m" data-tip="Edit MIDI pattern · or double-click the track" aria-label="MIDI editor">M</button>
       </div>`
     : "";
 
   art.innerHTML = `
     ${roleHtml}
-    <div class="slot-body">
+    <div class="slot-body"${serum ? ' data-tip="Double-click to open / close MIDI"' : ""}>
       <div class="slot-name">${serum ? `Serum · ${type}` : "— empty —"}</div>
       <div class="slot-meta">${serum ? "preset · MIDI will follow key" : "optional · pick with Reroll"}</div>
     </div>
@@ -4663,7 +4991,22 @@ function bindSlotElement(art) {
     doReroll(role).catch((e) => setStatus(`Reroll failed: ${e.message}`));
   });
   del?.addEventListener("click", () => removeTrack(role));
-  serumM?.addEventListener("click", () => doNewMidi(role));
+  serumM?.addEventListener("click", (e) => {
+    // Second click of a double-click — don't open then immediately close.
+    if (e.detail > 1) return;
+    doNewMidi(role);
+  });
+  if (serumM) {
+    art.addEventListener("dblclick", (e) => {
+      if (e.target.closest("select, input, textarea, a, .slot-actions, .slot-role-wrap")) {
+        return;
+      }
+      // M already toggled on the first click.
+      if (e.target.closest(".serum-m, .slot-serum-tools")) return;
+      e.preventDefault();
+      doNewMidi(role);
+    });
+  }
   typeSel?.addEventListener("change", () => {
     if (!state.slots[role]) state.slots[role] = {};
     pushUndo(`Type · ${role}`);
@@ -4747,12 +5090,15 @@ function removeTrack(id) {
     setStatus("Keep at least one track");
     return;
   }
+  const wasSolo = Boolean(state.slots[id]?.solo);
   pushUndo("Delete track");
   if (midiEditors[id]) closeMidiEditor(id);
   if (previewLoopRole === id) stopAll();
+  else teardownPlayingTrack(id);
   state.trackOrder = state.trackOrder.filter((x) => x !== id);
   delete state.slots[id];
   $(`.slot[data-role="${id}"]`)?.remove();
+  if (wasSolo) applyAllTrackGains();
   renderThemePanel();
   setStatus(`Removed track · Ctrl+Z to undo`);
 }
@@ -4766,7 +5112,7 @@ function initDefaultTracks() {
   state.trackOrder = [];
   state.slots = {};
   trackSeq = 0;
-  state.progression = null;
+  if (!isThemeLocked()) state.progression = null;
   // New stack, not an overwrite of the previous themed save.
   state.currentLoopId = null;
   state.currentLoopName = null;
@@ -4843,6 +5189,7 @@ function cloneMidi(midi) {
     bars: midi.bars === 4 || (Array.isArray(midi.grid) && midi.grid.length === 64) ? 4 : 1,
     source: midi.source || "pattern",
     locked: Boolean(midi.locked),
+    ...midiShapeFrom(midi),
     grid: Array.isArray(midi.grid)
       ? midi.grid.map((c) => {
           if (!c || typeof c !== "object") return null;
@@ -4885,6 +5232,7 @@ function cloneProgression(prog) {
             pcs: Array.isArray(c.pcs) ? c.pcs.slice() : [],
             intervals: Array.isArray(c.intervals) ? c.intervals.slice() : [],
             alters: c.alters && typeof c.alters === "object" ? { ...c.alters } : {},
+            enabled: c.enabled !== false,
           };
         })
       : [],
@@ -4982,6 +5330,7 @@ function restoreDocSnapshot(snap) {
     stopAll();
     closeAllMidiEditors();
     state.progression = cloneProgression(snap.progression);
+    syncThemeLockFromProgression();
     const list = $("#slot-list");
     if (!list) return;
     list.innerHTML = "";
@@ -4993,7 +5342,7 @@ function restoreDocSnapshot(snap) {
     const styleEl = $("#style");
     if (bpmEl && snap.bpm != null) bpmEl.value = String(snap.bpm);
     if (keyEl && snap.key) keyEl.value = snap.key;
-    if (styleEl && snap.style != null) styleEl.value = snap.style;
+    if (styleEl && snap.style != null) setStyleValue(snap.style);
     rememberSessionKey(keyEl?.value || snap.key);
 
     trackSeq = Number(snap.trackSeq) || 0;
@@ -5194,6 +5543,7 @@ function applyLoadedLoop(doc) {
   if (!list) return;
   pushUndo("Load loop");
   state.progression = null;
+  state.themeLocked = false;
   stopAll();
   closeAllMidiEditors();
   bufferCache.clear();
@@ -5208,7 +5558,7 @@ function applyLoadedLoop(doc) {
   const styleEl = $("#style");
   if (bpmEl && doc.bpm != null) bpmEl.value = String(doc.bpm);
   if (keyEl && doc.key) keyEl.value = doc.key;
-  if (styleEl && doc.style != null) styleEl.value = doc.style;
+  if (styleEl && doc.style != null) setStyleValue(doc.style);
   rememberSessionKey(keyEl?.value || doc.key);
 
   const filterOn = Boolean(doc.options?.filterRisers);
@@ -5301,6 +5651,7 @@ function applyLoadedLoop(doc) {
   state.currentLoopId = doc.id || null;
   state.currentLoopName = doc.name || null;
   state.progression = cloneProgression(doc.progression);
+  syncThemeLockFromProgression();
   renderThemePanel();
 }
 
@@ -5477,8 +5828,7 @@ function initUiChrome() {
   // Session fields also persist as user settings
   $("#bpm")?.addEventListener("change", () => scheduleSaveUserSettings());
   $("#key")?.addEventListener("change", () => scheduleSaveUserSettings({ immediate: true }));
-  $("#style")?.addEventListener("change", () => scheduleSaveUserSettings());
-  $("#style")?.addEventListener("blur", () => scheduleSaveUserSettings({ immediate: true }));
+  $("#style")?.addEventListener("change", () => scheduleSaveUserSettings({ immediate: true }));
 
   $("#btn-add-track")?.addEventListener("click", () => {
     const type = $("#add-track-type")?.value || "bass";
@@ -6182,6 +6532,7 @@ async function init() {
   initMidiEditorUi();
   initWaveOverview();
   initBottomTips();
+  bindStylePickerOpen();
 
   if (isFileProtocol()) {
     setStatus(

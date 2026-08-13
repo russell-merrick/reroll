@@ -322,7 +322,7 @@ function defaultOctave(role) {
 }
 
 function defaultPatternId(role) {
-  return role === "bass" ? "root-quarters" : "scale-walk";
+  return role === "bass" ? "root-quarters" : "techno-gallop";
 }
 
 /** Repeat count: a bars*16 grid is already a full loop — do not tile again. */
@@ -402,6 +402,9 @@ function createMidiState(role, keyStr) {
     source: "pattern",
     grid: buildPatternGrid(patternId),
     locked: false,
+    density: 0.5,
+    variance: 0.5,
+    length: 0.5,
   };
 }
 

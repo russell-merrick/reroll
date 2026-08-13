@@ -34,7 +34,10 @@ from .export_loop import export_loop
 from .generate import catalog_style_suggestions, generate_loop, generate_tracks, reroll_slot
 from .harmony import (
     RECIPES,
+    THEME_ROMANS,
+    apply_edited_harmony,
     apply_harmony,
+    dice_bass,
     dice_chords,
     dice_lead,
     reconcile_progression,
@@ -180,6 +183,9 @@ class HarmonyTrack(BaseModel):
     type: str
     midi: dict[str, Any] | None = None
     octave: int | None = None
+    density: float = 0.5
+    variance: float = 0.5
+    length: float = 0.5
 
 
 class DiceChordsRequest(BaseModel):
@@ -188,6 +194,10 @@ class DiceChordsRequest(BaseModel):
     avoid_recipe_id: str | None = None
     locked: bool = False
     tracks: list[HarmonyTrack] = Field(default_factory=list)
+    density: float = 0.5
+    variance: float = 0.5
+    length: float = 0.5
+    seed: int | None = None
 
 
 class ApplyHarmonyRequest(BaseModel):
@@ -196,12 +206,28 @@ class ApplyHarmonyRequest(BaseModel):
     tracks: list[HarmonyTrack] = Field(default_factory=list)
 
 
+class SetChordsRequest(BaseModel):
+    key: str = "F minor"
+    progression: dict[str, Any]
+    tracks: list[HarmonyTrack] = Field(default_factory=list)
+    bar: int
+    roman: str | None = None
+    enabled: bool | None = None
+
+
 class DiceLeadRequest(BaseModel):
     key: str = "F minor"
     style: str = ""
     progression: dict[str, Any]
     tracks: list[HarmonyTrack] = Field(default_factory=list)
     seed: int | None = None
+    density: float = 0.5
+    variance: float = 0.5
+    length: float = 0.5
+
+
+class DiceBassRequest(DiceLeadRequest):
+    pass
 
 
 class UserSettings(BaseModel):
@@ -209,7 +235,7 @@ class UserSettings(BaseModel):
 
     bpm: int = 140
     key: str = "F minor"
-    style: str = "No preference"
+    style: str = "Techno"
     filterRisers: bool = True
     filterFactorySerum: bool = False
     kidTime: bool = False
@@ -515,6 +541,7 @@ def api_harmony_recipes() -> dict[str, Any]:
     return {
         "ok": True,
         "loop_bars": LOOP_BARS,
+        "theme_romans": list(THEME_ROMANS),
         "recipes": [
             {
                 "id": rec["id"],
@@ -538,6 +565,10 @@ def api_dice_chords(body: DiceChordsRequest) -> dict[str, Any]:
             style=body.style,
             tracks=_harmony_track_dicts(body.tracks),
             avoid_recipe_id=body.avoid_recipe_id,
+            density=body.density,
+            variance=body.variance,
+            length=body.length,
+            seed=body.seed,
         )
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -559,6 +590,43 @@ def api_harmony_apply(body: ApplyHarmonyRequest) -> dict[str, Any]:
     return {"ok": True, **result}
 
 
+@app.post("/api/harmony/set-chords")
+def api_set_chords(body: SetChordsRequest) -> dict[str, Any]:
+    if not body.progression:
+        raise HTTPException(status_code=400, detail="progression required")
+    try:
+        result = apply_edited_harmony(
+            key=body.key,
+            progression=body.progression,
+            tracks=_harmony_track_dicts(body.tracks),
+            bar=body.bar,
+            roman=body.roman,
+            enabled=body.enabled,
+        )
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, **result}
+
+
+@app.post("/api/harmony/dice-bass")
+def api_dice_bass(body: DiceBassRequest) -> dict[str, Any]:
+    if not body.progression:
+        raise HTTPException(status_code=400, detail="progression required")
+    try:
+        result = dice_bass(
+            key=body.key,
+            progression=body.progression,
+            tracks=_harmony_track_dicts(body.tracks),
+            seed=body.seed,
+            density=body.density,
+            variance=body.variance,
+            length=body.length,
+        )
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, **result}
+
+
 @app.post("/api/harmony/dice-lead")
 def api_dice_lead(body: DiceLeadRequest) -> dict[str, Any]:
     if not body.progression:
@@ -569,6 +637,9 @@ def api_dice_lead(body: DiceLeadRequest) -> dict[str, Any]:
             progression=body.progression,
             tracks=_harmony_track_dicts(body.tracks),
             seed=body.seed,
+            density=body.density,
+            variance=body.variance,
+            length=body.length,
         )
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
