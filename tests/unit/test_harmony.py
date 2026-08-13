@@ -238,6 +238,17 @@ def test_dice_lead_per_track_octave():
     assert n5 and all(lo5 <= n["midi"] <= lo5 + 14 for n in n5)
 
 
+def test_dice_lead_oct_only_when_not_track_octave():
+    prog = realize("i_VI_III_VII", "C major")
+    midi = dice_lead_grid(prog, "C major", seed=0, octave=4)
+    assert any(c and c.get("oct") is None for c in midi["grid"])
+    for cell in midi["grid"]:
+        if not cell:
+            continue
+        if "oct" in cell:
+            assert cell["oct"] != 4
+
+
 def test_apply_key_keeps_recipe_and_locked():
     prog = realize("i_VI_III_VII", "F minor")
     prog["locked"] = True

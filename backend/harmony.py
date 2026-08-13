@@ -463,14 +463,22 @@ def _split_midi(midi_n: int, key: str) -> tuple[int, int, int]:
     return deg, int(midi_n) // 12 - 1, alter
 
 
-def _cell_from_midi(midi_n: int, key: str, length: int, vel: int = 100) -> dict[str, Any]:
+def _cell_from_midi(
+    midi_n: int,
+    key: str,
+    length: int,
+    vel: int = 100,
+    *,
+    octave: int | None = None,
+) -> dict[str, Any]:
     deg, octv, alter = _split_midi(midi_n, key)
     cell: dict[str, Any] = {
         "degree": deg,
         "length": max(1, int(length)),
         "vel": vel,
-        "oct": octv,
     }
+    if octave is None or int(octv) != int(octave):
+        cell["oct"] = octv
     if alter:
         cell["alter"] = alter
     return cell
@@ -671,7 +679,7 @@ def dice_lead_grid(
                 length = 1
             if pitch is None:
                 continue
-            out[step] = _cell_from_midi(pitch, minor_key, length, 100)
+            out[step] = _cell_from_midi(pitch, minor_key, length, 100, octave=octv)
             prev = pitch
         # Guarantee a downbeat so a bar is never silent
         if out[bar * STEPS_PER_BAR] is None and (root_midis or chord_midis):
@@ -692,7 +700,9 @@ def dice_lead_grid(
                 rng=rng,
             )
             if pitch is not None:
-                out[bar * STEPS_PER_BAR] = _cell_from_midi(pitch, minor_key, 2, 100)
+                out[bar * STEPS_PER_BAR] = _cell_from_midi(
+                    pitch, minor_key, 2, 100, octave=octv
+                )
                 if prev is None:
                     prev = pitch
     return _midi_state(pattern_id="prog-lead", octave=octv, key=minor_key, grid=out)

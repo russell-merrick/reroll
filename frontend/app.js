@@ -239,12 +239,7 @@ function renderThemePanel() {
   if (diceBtn) diceBtn.disabled = locked;
 
   const leadBtn = $("#btn-dice-lead");
-  if (leadBtn) {
-    const hasLead = activeTrackIds().some(
-      (id) => isSerumTrack(id) && harmonyRole(baseType(id)) === "lead"
-    );
-    leadBtn.disabled = !prog || !hasLead;
-  }
+  if (leadBtn) leadBtn.disabled = !prog;
 }
 
 function newTrackId(type) {
@@ -3650,6 +3645,7 @@ function cloneMidiCell(c) {
     vel: c.vel,
   };
   if (c.alter) cell.alter = c.alter;
+  if (c.oct != null) cell.oct = c.oct;
   if (Array.isArray(c.voices) && c.voices.length) {
     cell.voices = c.voices.map((v) => ({ ...v }));
   }

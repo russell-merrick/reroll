@@ -246,16 +246,22 @@ function setNoteLength(grid, start, length) {
     const voices = cell.voices.map((v) => ({ ...v }));
     const deg = cell.degree;
     const alter = cell.alter;
+    const oct = cell.oct;
     placeVoices(grid, start, voices, length, cell.vel ?? 100);
     if (grid[start]) {
       grid[start].degree = deg;
       if (alter) grid[start].alter = alter;
+      if (oct != null) grid[start].oct = oct;
     }
     return;
   }
   const alter = cell.alter;
+  const oct = cell.oct;
   place(grid, start, cell.degree, length, cell.vel ?? 100);
-  if (alter && grid[start]) grid[start].alter = alter;
+  if (grid[start]) {
+    if (alter) grid[start].alter = alter;
+    if (oct != null) grid[start].oct = oct;
+  }
 }
 
 /** Cycle inversion: move the lowest sounding voice up one octave. */
