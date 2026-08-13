@@ -121,16 +121,41 @@ def test_pad_sevenths_only_on_two_recipes():
             assert n == 3
 
 
+def _lead_notes(midi: dict, octave: int) -> list[dict]:
+    notes = grid_to_notes(midi["grid"], key=midi["key"], octave=octave, bars=4)
+    return sorted(notes, key=lambda n: n["start_beat"])
+
+
 def test_dice_lead_octave_5_ninth():
     prog = realize("i_VI_III_VII", "C major")
     for seed in range(8):
         midi = dice_lead_grid(prog, "C major", seed=seed, octave=5)
         assert len(midi["grid"]) == 64
         assert midi["key"] == "C minor"
-        notes = grid_to_notes(midi["grid"], key=midi["key"], octave=5, bars=4)
+        notes = _lead_notes(midi, 5)
         assert notes
         # C5–D6
         assert all(72 <= n["midi"] <= 86 for n in notes)
         lo = degree_to_midi(midi["key"], 0, 5)
         assert lo == 72
         assert all(lo <= n["midi"] <= lo + 14 for n in notes)
+
+
+def test_dice_lead_leaps_capped_after_first():
+    prog = realize("i_VI_III_VII", "F minor")
+    for seed in range(50):
+        midi = dice_lead_grid(prog, "F minor", seed=seed, octave=5)
+        notes = _lead_notes(midi, 5)
+        assert notes
+        for a, b in zip(notes, notes[1:]):
+            assert abs(b["midi"] - a["midi"]) <= 7, (seed, a["midi"], b["midi"])
+
+
+def test_dice_lead_avoid_moves_bar_start():
+    prog = realize("i_VI_III_VII", "F minor")
+    avoid = [5, 1, 8, 3]  # i–VI–III–VII roots
+    midi = dice_lead_grid(prog, "F minor", seed=0, octave=5, avoid=avoid)
+    notes = _lead_notes(midi, 5)
+    bar0 = [n for n in notes if n["start_beat"] == 0.0]
+    assert bar0
+    assert bar0[0]["midi"] % 12 != 5

@@ -519,12 +519,34 @@ def _pick_near(
         if not near:
             near = [m for m in cand if abs(m - prev) <= max_leap]
         if near:
-            cand = near
-    elif prev is not None:
+            return rng.choice(near)
+        return min(cand, key=lambda m: (abs(m - prev), m))
+    if prev is not None:
         moved = [m for m in cand if m != prev]
         if moved:
             cand = moved
     return rng.choice(cand)
+
+
+def _bar_start_pool(
+    root_midis: list[int],
+    third_fifth: list[int],
+    chord_midis: list[int],
+    prev: int | None,
+    max_leap: int | None,
+    avoid_pcs: set[int] | None,
+) -> list[int]:
+    """Root on s==0 only if it stays in the leap window and is not avoided."""
+    roots = list(root_midis)
+    others = list(third_fifth) if third_fifth else [m for m in chord_midis if m not in roots]
+    if avoid_pcs and roots and all((m % 12) in avoid_pcs for m in roots):
+        return others or chord_midis
+    if prev is None or max_leap is None:
+        return roots or others or chord_midis
+    in_window = [m for m in roots if abs(m - prev) <= max_leap]
+    if in_window:
+        return in_window
+    return others or chord_midis or roots
 
 
 def _downbeat_pcs(grid: list | None, key: str) -> set[int]:
@@ -597,21 +619,23 @@ def dice_lead_grid(
             length = 1
             if s % 4 == 0:
                 if s == 0:
-                    pool = root_midis or chord_midis
-                    pitch = _pick_near(
-                        pool,
+                    pool = _bar_start_pool(
+                        root_midis,
+                        third_fifth,
+                        chord_midis,
                         prev,
-                        avoid_pcs=avoid_pcs if bar > 0 or prev is None else None,
-                        max_leap=max_leap,
-                        rng=rng,
+                        max_leap,
+                        avoid_pcs,
                     )
                 else:
-                    pitch = _pick_near(
-                        third_fifth or chord_midis,
-                        prev,
-                        max_leap=max_leap,
-                        rng=rng,
-                    )
+                    pool = third_fifth or chord_midis
+                pitch = _pick_near(
+                    pool,
+                    prev,
+                    avoid_pcs=avoid_pcs,
+                    max_leap=max_leap,
+                    rng=rng,
+                )
                 hi_len = min(4, room)
                 lo_len = min(2, hi_len)
                 length = rng.randint(lo_len, hi_len)
@@ -650,7 +674,24 @@ def dice_lead_grid(
             prev = pitch
         # Guarantee a downbeat so a bar is never silent
         if out[bar * STEPS_PER_BAR] is None and (root_midis or chord_midis):
-            pitch = (root_midis or chord_midis)[0]
-            out[bar * STEPS_PER_BAR] = _cell_from_midi(pitch, minor_key, 2, 100)
-            prev = pitch
+            cap = None if prev is None and bar == 0 else 7
+            pitch = _pick_near(
+                _bar_start_pool(
+                    root_midis,
+                    third_fifth,
+                    chord_midis,
+                    prev,
+                    cap,
+                    avoid_pcs,
+                )
+                or chord_midis,
+                prev,
+                avoid_pcs=avoid_pcs,
+                max_leap=cap,
+                rng=rng,
+            )
+            if pitch is not None:
+                out[bar * STEPS_PER_BAR] = _cell_from_midi(pitch, minor_key, 2, 100)
+                if prev is None:
+                    prev = pitch
     return _midi_state(pattern_id="prog-lead", octave=octv, key=minor_key, grid=out)
