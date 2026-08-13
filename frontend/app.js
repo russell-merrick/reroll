@@ -2955,7 +2955,6 @@ async function diceChords() {
     setStatus("Theme locked — unlock to dice chords");
     return;
   }
-  pushUndo("Dice chords");
   const res = await api("/api/harmony/dice-chords", {
     method: "POST",
     body: JSON.stringify({
@@ -2966,6 +2965,7 @@ async function diceChords() {
       tracks: harmonyTracksPayload(),
     }),
   });
+  pushUndo("Dice chords");
   state.progression = res.progression;
   const ids = applyHarmonyMidi(res.midi || {});
   console.info("Theme apply", res.progression?.recipe_id, ids);
@@ -2999,6 +2999,31 @@ function initThemePanel() {
   renderThemePanel();
 }
 
+/** Write the current theme onto one new bass/pad (same recipe, still Aeolian). */
+async function applyThemeToTrack(id) {
+  if (!state.progression || !state.slots[id]) return;
+  const role = harmonyRole(baseType(id));
+  if (role !== "bass" && role !== "pad") return;
+  const res = await api("/api/harmony/apply", {
+    method: "POST",
+    body: JSON.stringify({
+      key: $("#key")?.value || "F minor",
+      progression: cloneProgression(state.progression),
+      tracks: [
+        {
+          id,
+          type: baseType(id),
+          midi: cloneMidi(state.slots[id].midi),
+          octave: state.slots[id].midi?.octave ?? null,
+        },
+      ],
+    }),
+  });
+  if (res.progression) state.progression = res.progression;
+  const ids = applyHarmonyMidi(res.midi || {});
+  console.info("Theme apply", state.progression?.recipe_id, ids);
+}
+
 async function rekeyAllMidi() {
   if (!window.MidiEngine) return;
   const key = $("#key")?.value || "F minor";
@@ -3011,6 +3036,7 @@ async function rekeyAllMidi() {
         tracks: harmonyTracksPayload(),
       }),
     });
+    pushUndo("Key");
     if (res.progression) state.progression = res.progression;
     const ids = applyHarmonyMidi(res.midi || {});
     const rewritten = new Set(ids);
@@ -4650,9 +4676,12 @@ function addTrack(type, { silent = false } = {}) {
   list?.appendChild(art);
   bindSlotElement(art);
   if (isSerumTrack(id)) ensureSlotMidi(id);
+  const themed = applyThemeToTrack(id);
   if (!silent) {
     setStatus(`Added ${t} track`);
-    doReroll(id).catch(() => {});
+    themed
+      .catch((e) => console.warn(`theme apply ${id}:`, e))
+      .finally(() => doReroll(id).catch(() => {}));
   }
   return id;
 }
@@ -4680,6 +4709,8 @@ function initDefaultTracks() {
   state.trackOrder = [];
   state.slots = {};
   trackSeq = 0;
+  state.progression = null;
+  renderThemePanel();
   ensureInstrumentsState();
   const types = getDefaultTrackTypes();
   for (const t of types) {
@@ -5105,6 +5136,9 @@ function applyLoadedLoop(doc) {
   state.trackOrder = [];
   state.slots = {};
   trackSeq = 0;
+  // PR 5 restores from the document; until then drop a leftover theme
+  state.progression = null;
+  renderThemePanel();
 
   const bpmEl = $("#bpm");
   const keyEl = $("#key");

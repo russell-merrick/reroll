@@ -185,26 +185,24 @@ def test_apply_key_keeps_recipe_and_locked():
 
 
 def test_f_major_session_bass_vi_is_db_not_d():
-    """Hear-it: #key = F major, i–VI–III–VII bar-1 bass root is Db (49), not D (50)."""
+    """Hear-it: #key = F major → returned bass midi.key is F minor; VI root is Db (49)."""
     out = dice_chords(
         key="F major",
         style="melodic techno",
         tracks=[{"id": "bass", "type": "bass", "octave": 2}],
         avoid_recipe_id="pedal_i",
     )
-    # Force the anthem recipe so the assertion is the VI (Db), not a random pick.
-    prog = realize("i_VI_III_VII", "F major")
-    midi = rewrite_bass_grid(prog, octave=2)
-    assert midi["key"] == "F minor"
-    bar1 = midi["grid"][16]
-    assert bar1 is not None
-    assert bar1["degree"] == 5  # Aeolian VI
-    notes = grid_to_notes(midi["grid"], key=midi["key"], octave=2, bars=4)
-    bar1_notes = [n for n in notes if 4.0 <= n["start_beat"] < 8.0]
-    assert bar1_notes
-    assert bar1_notes[0]["midi"] == 49  # Db2
-    assert all(n["midi"] != 50 for n in bar1_notes)
+    bass = out["midi"]["bass"]
+    assert bass["key"] == "F minor"
     assert out["progression"]["key"] == "F minor"
+    notes = grid_to_notes(bass["grid"], key=bass["key"], octave=2, bars=4)
+    vi_bars = [c["bar"] for c in out["progression"]["chords"] if c["roman"] == "VI"]
+    assert vi_bars, out["progression"]["recipe_id"]
+    for bar in vi_bars:
+        bar_notes = [n for n in notes if bar * 4.0 <= n["start_beat"] < (bar + 1) * 4.0]
+        assert bar_notes
+        assert bar_notes[0]["midi"] == 49  # Db2
+        assert all(n["midi"] != 50 for n in bar_notes)
 
 
 def test_apply_rewrites_bass_not_user_lead():
