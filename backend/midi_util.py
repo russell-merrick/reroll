@@ -9,6 +9,7 @@ from typing import Any
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 MAJOR = [0, 2, 4, 5, 7, 9, 11]
 MINOR = [0, 2, 3, 5, 7, 8, 10]
+STEPS_PER_BAR = 16
 
 
 def parse_key(key: str) -> tuple[int, str]:
@@ -140,11 +141,32 @@ def pitch_ratio_from_semitones(semitones: float) -> float:
     return float(2.0 ** (float(semitones) / 12.0))
 
 
-def degree_to_midi(key: str, degree: int, octave: int = 3) -> int:
+def degree_to_midi(key: str, degree: int, octave: int = 3, alter: int = 0) -> int:
     root, quality = parse_key(key)
     ints = MAJOR if quality == "major" else MINOR
     d = int(degree) % 7
-    return (int(octave) + 1) * 12 + root + ints[d]
+    return (int(octave) + 1) * 12 + root + ints[d] + int(alter or 0)
+
+
+def expand_bars(grid: list | None, bars: int) -> int:
+    n = len(grid) if grid is not None else 0
+    n = n or 16
+    if n == int(bars) * STEPS_PER_BAR:
+        return 1  # already a full-loop grid
+    return max(1, int(bars))
+
+
+def cell_voices(cell: dict) -> list[dict]:
+    if isinstance(cell.get("voices"), list) and cell["voices"]:
+        return cell["voices"]
+    out: dict[str, Any] = {
+        "degree": cell.get("degree", 0),
+        "alter": cell.get("alter", 0),
+        "vel": cell.get("vel", 100),
+    }
+    if cell.get("oct") is not None:
+        out["oct"] = cell["oct"]
+    return [out]
 
 
 def grid_to_notes(
@@ -154,29 +176,33 @@ def grid_to_notes(
     octave: int = 3,
     bars: int = 4,
 ) -> list[dict[str, Any]]:
-    """Convert monophonic 16-step degree grid → beat-based notes."""
+    """Convert degree grid → beat notes. A bars*16 grid is not tiled again."""
     if not grid:
         return []
     notes: list[dict[str, Any]] = []
-    steps = len(grid) or 16
-    for bar in range(max(1, int(bars))):
+    steps = len(grid)
+    for bar in range(expand_bars(grid, bars)):
         for s, cell in enumerate(grid):
             if not cell or not isinstance(cell, dict):
                 continue
-            degree = int(cell.get("degree", 0))
             length = max(1, int(cell.get("length", 1)))
-            vel = int(cell.get("vel", 100))
-            step = bar * steps + s
-            start_beat = step / 4.0
+            start_beat = (bar * steps + s) / 4.0
             dur_beats = max(0.05, length / 4.0)
-            notes.append(
-                {
-                    "midi": degree_to_midi(key, degree, octave),
-                    "start_beat": start_beat,
-                    "duration_beats": dur_beats,
-                    "velocity": max(1, min(127, vel)),
-                }
-            )
+            for voice in cell_voices(cell):
+                if not isinstance(voice, dict):
+                    continue
+                deg = int(voice.get("degree", cell.get("degree", 0)))
+                octv = voice.get("oct", cell.get("oct", octave))
+                alter = int(voice.get("alter", cell.get("alter", 0)) or 0)
+                vel = int(voice.get("vel", cell.get("vel", 100)))
+                notes.append(
+                    {
+                        "midi": degree_to_midi(key, deg, int(octv), alter=alter),
+                        "start_beat": start_beat,
+                        "duration_beats": dur_beats,
+                        "velocity": max(1, min(127, vel)),
+                    }
+                )
     return notes
 
 

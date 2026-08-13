@@ -54,3 +54,30 @@ def test_note_times_in_seconds_at_bpm():
     assert abs(notes[1]["start_beat"] * spb - spb) < 1e-9
     # One beat == 4 sixteenths
     assert abs(spb - 4 * sec_per_16th(bpm)) < 1e-9
+
+
+def test_host_64_step_not_double_tiled():
+    grid: list[dict | None] = [None] * 64
+    grid[0] = {"degree": 0, "length": 4, "vel": 100}
+    grid[48] = {"degree": 5, "length": 4, "vel": 100}
+    notes = grid_to_notes(grid, key="F minor", octave=2, bars=LOOP_BARS)
+    starts = sorted(n["start_beat"] for n in notes)
+    assert starts[-1] < 16
+    assert starts == [0.0, 12.0]
+
+
+def test_host_voices_same_start_beat():
+    grid: list[dict | None] = [None] * 16
+    grid[0] = {
+        "degree": 0,
+        "length": 16,
+        "vel": 90,
+        "voices": [
+            {"degree": 0, "oct": 3},
+            {"degree": 2, "oct": 3},
+            {"degree": 4, "oct": 3},
+        ],
+    }
+    notes = grid_to_notes(grid, key="F minor", octave=3, bars=1)
+    assert len(notes) == 3
+    assert all(n["start_beat"] == 0.0 for n in notes)
