@@ -30,6 +30,8 @@ const state = {
   currentLoopId: null,
   /** Last saved / loaded display name */
   currentLoopName: null,
+  /** Session theme (PR 3 snapshot only; PR 2 fills this). */
+  progression: null,
 };
 
 const THEME_IDS = ["dark", "light", "neon", "rainbow"];
@@ -147,6 +149,55 @@ function isSerumTrack(id) {
   if (s.kind === "serum") return true;
   return isSerumType(baseType(id));
 }
+
+const PAD_TYPES = new Set(["pad", "pads", "strings", "chorus", "keys"]);
+const LEAD_TYPES = new Set([
+  "lead",
+  "synth",
+  "arp",
+  "pluck",
+  "seq",
+  "hoover",
+  "guitar",
+  "brass",
+]);
+
+/** Mirror of backend.harmony.harmony_role — bass | pad | lead | null. */
+function harmonyRole(trackType) {
+  const t = String(trackType || "")
+    .split("__")[0]
+    .trim()
+    .toLowerCase();
+  if (t === "bass") return "bass";
+  if (PAD_TYPES.has(t)) return "pad";
+  if (LEAD_TYPES.has(t)) return "lead";
+  return null;
+}
+
+function midiRoleForSlot(role) {
+  const hr = harmonyRole(baseType(role));
+  if (hr === "bass" || hr === "pad") return hr;
+  return "lead";
+}
+
+function slotMidiKey(role) {
+  const k = state.slots[role]?.midi?.key;
+  if (k) return k;
+  return $("#key")?.value || "F minor";
+}
+
+function markMidiUser(role) {
+  const ed = midiEditors[role];
+  if (ed) {
+    ed.draft.source = "user";
+    ed.draft.patternId = "custom";
+  }
+  if (state.slots[role]?.midi) state.slots[role].midi.source = "user";
+  markMidiCustom(role);
+}
+
+/** PR 3 stub — PR 2 replaces. restoreDocSnapshot always calls this. */
+function renderThemePanel() {}
 
 function newTrackId(type) {
   trackSeq += 1;
@@ -1419,13 +1470,20 @@ function syncPreviewBtn(role) {
       : "Loop this sample (toggle to stop)";
 }
 
+function midiLoopBars(midi) {
+  if (!midi) return 1;
+  if (midi.bars === 4 || (Array.isArray(midi.grid) && midi.grid.length === 64)) return 4;
+  return midi.bars || (midi.grid?.length > 16 ? 4 : 1);
+}
+
 function scheduleMidiPreviewBar(role, when) {
   if (!window.MidiEngine) return;
   const s = state.slots[role];
   if (!s?.midi?.grid) return;
-  const key = $("#key")?.value || "F minor";
+  const key = slotMidiKey(role);
   const step16 = secPer16th();
-  const notes = MidiEngine.gridToNotes(s.midi.grid, key, s.midi.octave, 1);
+  const bars = midiLoopBars(s.midi);
+  const notes = MidiEngine.gridToNotes(s.midi.grid, key, s.midi.octave, bars);
   for (const n of notes) {
     scheduleSynthNote(
       n.midi,
@@ -1437,10 +1495,11 @@ function scheduleMidiPreviewBar(role, when) {
   }
 }
 
-/** Arm next MIDI preview bar (BPM-live). */
+/** Arm next MIDI preview cycle (BPM-live). */
 function armMidiPreviewLoop(role) {
   if (previewLoopRole !== role || !audioCtx) return;
-  const barSec = secPer16th() * 16;
+  const bars = midiLoopBars(state.slots[role]?.midi);
+  const barSec = secPer16th() * 16 * bars;
   const t0 = audioCtx.currentTime + 0.03;
   scheduleMidiPreviewBar(role, t0);
   if (previewMidiTimer != null) clearTimeout(previewMidiTimer);
@@ -1578,7 +1637,6 @@ function scheduleSynthNote(midi, when, durationSec, role, vel = 100) {
 
 function scheduleMidiAtStep(step, when) {
   if (!window.MidiEngine) return;
-  const key = $("#key")?.value || "F minor";
   const step16 = secPer16th();
 
   for (const role of activeTrackIds()) {
@@ -1588,14 +1646,23 @@ function scheduleMidiAtStep(step, when) {
     const midiState = state.slots[role]?.midi;
     if (!midiState?.grid) continue;
     // Mute via track gain; still schedule so unmute mid-note works for future notes
-    const barStep = step % 16;
-    const cell = midiState.grid[barStep];
+    const n = midiState.grid.length || 16;
+    const idx = step % n;
+    const cell = midiState.grid[idx];
     if (!cell) continue;
-    const t = baseType(role);
-    const oct = midiState.octave ?? MidiEngine.defaultOctave(t === "bass" ? "bass" : "lead");
-    const note = MidiEngine.degreeToMidi(key, cell.degree, oct);
+    const key = slotMidiKey(role);
+    const oct =
+      midiState.octave ?? MidiEngine.defaultOctave(midiRoleForSlot(role));
+    const voices = MidiEngine.cellVoices(cell);
     const dur = Math.max(0.05, (cell.length || 1) * step16 * 0.95);
-    scheduleSynthNote(note, when, dur, role, cell.vel ?? 100);
+    for (const voice of voices) {
+      const deg = voice.degree ?? cell.degree ?? 0;
+      const octv = voice.oct ?? cell.oct ?? oct;
+      const alter = voice.alter ?? cell.alter ?? 0;
+      const vel = voice.vel ?? cell.vel ?? 100;
+      const note = MidiEngine.degreeToMidi(key, deg, octv, alter);
+      scheduleSynthNote(note, when, dur, role, vel);
+    }
   }
 }
 
@@ -1981,7 +2048,7 @@ async function renderOneSerumStem(role, opts = {}) {
   if (!pl.endsWith(".fxp") && !pl.endsWith(".serumpreset")) return null;
 
   const bpm = getBpm();
-  const key = $("#key")?.value || "F minor";
+  const key = slotMidiKey(role);
   const bars = scheduler.bars || LOOP_BARS;
   if (!opts.quiet) setStatus(`Rendering Serum · ${role}…`);
 
@@ -1990,7 +2057,7 @@ async function renderOneSerumStem(role, opts = {}) {
     bpm,
     bars,
     key,
-    octave: s.midi.octave ?? (baseType(role) === "bass" ? 2 : 4),
+    octave: s.midi.octave ?? MidiEngine.defaultOctave(midiRoleForSlot(role)),
     fxp: s.path,
     grid: s.midi.grid,
   };
@@ -2577,7 +2644,7 @@ function applySlot(role, data) {
 
   // Keep meta showing MIDI summary for serum roles
   if (isSerumTrack(role) && state.slots[role]?.midi && window.MidiEngine) {
-    const key = $("#key")?.value || "F minor";
+    const key = slotMidiKey(role);
     const sum = MidiEngine.midiSummary(state.slots[role].midi, key);
     if (metaEl && data.kind === "serum") {
       const fullMeta = `${data.meta || "Serum"} · ${sum}`;
@@ -2784,14 +2851,14 @@ async function doScan() {
 function ensureSlotMidi(role) {
   if (!window.MidiEngine) return null;
   if (!isSerumTrack(role)) return null;
-  const key = $("#key")?.value || "F minor";
   if (!state.slots[role]) state.slots[role] = {};
-  const midiRole = baseType(role) === "bass" ? "bass" : "lead";
   if (!state.slots[role].midi) {
-    state.slots[role].midi = MidiEngine.createMidiState(midiRole, key);
-  } else {
-    state.slots[role].midi.key = key;
+    state.slots[role].midi = MidiEngine.createMidiState(
+      midiRoleForSlot(role),
+      $("#key")?.value || "F minor"
+    );
   }
+  // do NOT assign midi.key here — undo/load already cloned it
   return state.slots[role].midi;
 }
 
@@ -3327,6 +3394,78 @@ async function openSerumUi(role) {
   setStatus(`Serum UI launched (pid ${result.pid}) · ${name} — close the window when done`);
 }
 
+function cloneMidiCell(c) {
+  if (!c || typeof c !== "object") return null;
+  const cell = {
+    degree: c.degree,
+    length: c.length,
+    vel: c.vel,
+  };
+  if (c.alter) cell.alter = c.alter;
+  if (Array.isArray(c.voices) && c.voices.length) {
+    cell.voices = c.voices.map((v) => ({ ...v }));
+  }
+  return cell;
+}
+
+/** Tile a 16-step library pattern into each bar of a 64-step draft. */
+function applyPatternToDraft(draft, patternId) {
+  const bar = MidiEngine.buildPatternGrid(patternId);
+  const n = Array.isArray(draft.grid) && draft.grid.length === 64 ? 64 : 16;
+  if (n === 64) {
+    const out = MidiEngine.emptyGrid(64);
+    for (let b = 0; b < 4; b++) {
+      for (let s = 0; s < 16; s++) {
+        out[b * 16 + s] = cloneMidiCell(bar[s]);
+      }
+    }
+    draft.grid = out;
+    draft.bars = 4;
+  } else {
+    draft.grid = bar;
+    if (draft.bars !== 4) draft.bars = 1;
+  }
+  draft.patternId = patternId;
+  draft.source = "user";
+}
+
+function editorStepOffset(role) {
+  const ed = midiEditors[role];
+  if (!ed?.draft?.grid || ed.draft.grid.length !== 64) return 0;
+  return Math.max(0, Math.min(3, ed.barIndex || 0)) * 16;
+}
+
+function isPadOrVoicesEditor(role, cell) {
+  if (harmonyRole(baseType(role)) === "pad") return true;
+  return Boolean(cell && Array.isArray(cell.voices) && cell.voices.length);
+}
+
+function voicesFromProgressionBar(barIndex, octave, keyStr) {
+  const chord = state.progression?.chords?.[barIndex];
+  if (!chord || !window.MidiEngine) return null;
+  const key = keyStr || state.progression.key || "F minor";
+  const pcs = Array.isArray(chord.pcs) ? chord.pcs : [];
+  if (!pcs.length) {
+    return [{ degree: chord.root_degree ?? 0, oct: octave, vel: 90 }];
+  }
+  const voices = [];
+  let lastMidi = -Infinity;
+  for (const pc of pcs) {
+    const mapped = MidiEngine.pcToDegreeAlter(pc, key);
+    let oct = octave;
+    let midi = MidiEngine.degreeToMidi(key, mapped.degree, oct, mapped.alter);
+    while (midi <= lastMidi) {
+      oct += 1;
+      midi = MidiEngine.degreeToMidi(key, mapped.degree, oct, mapped.alter);
+    }
+    const v = { degree: mapped.degree, oct, vel: 90 };
+    if (mapped.alter) v.alter = mapped.alter;
+    voices.push(v);
+    lastMidi = midi;
+  }
+  return voices;
+}
+
 function buildMidiEditorElement(role) {
   const sec = document.createElement("section");
   sec.className = "midi-section";
@@ -3346,6 +3485,14 @@ function buildMidiEditorElement(role) {
           <button type="button" class="btn ghost" data-action="close" data-tip="Hide this MIDI editor">Close</button>
         </div>
       </header>
+      <div class="midi-bar-pager" hidden>
+        <span class="midi-bar-label">Bar</span>
+        <button type="button" class="midi-bar-btn" data-bar="0">1</button>
+        <button type="button" class="midi-bar-btn" data-bar="1">2</button>
+        <button type="button" class="midi-bar-btn" data-bar="2">3</button>
+        <button type="button" class="midi-bar-btn" data-bar="3">4</button>
+      </div>
+      <div class="midi-roman-strip" hidden></div>
       <div class="midi-toolbar">
         <label class="field">
           <span>Pattern</span>
@@ -3407,18 +3554,20 @@ function bindMidiEditorRoot(role, root) {
     // From custom / unknown → start at first; else advance and wrap
     idx = idx < 0 ? 0 : (idx + 1) % opts.length;
     const id = opts[idx].value;
-    ed.draft.patternId = id;
-    ed.draft.grid = MidiEngine.buildPatternGrid(id);
+    applyPatternToDraft(ed.draft, id);
     sel.value = id;
+    if (state.slots[role]?.midi) state.slots[role].midi.source = "user";
     renderMidiEditor(role);
     commitMidiDraft(role);
     setStatus(`Pattern · ${role} · ${opts[idx].textContent || id}`);
   });
   on("clear", () => {
     const ed = midiEditors[role];
-    if (!ed) return;
-    ed.draft.grid = Array.from({ length: 16 }, () => null);
-    ed.draft.patternId = "custom";
+    if (!ed || !window.MidiEngine) return;
+    const n = ed.draft.grid?.length === 64 ? 64 : 16;
+    ed.draft.grid = MidiEngine.emptyGrid(n);
+    if (n === 64) ed.draft.bars = 4;
+    markMidiUser(role);
     renderMidiEditor(role);
     commitMidiDraft(role);
   });
@@ -3428,10 +3577,18 @@ function bindMidiEditorRoot(role, root) {
     if (!ed || !window.MidiEngine) return;
     const id = sel.value;
     if (id === "custom") return;
-    ed.draft.patternId = id;
-    ed.draft.grid = MidiEngine.buildPatternGrid(id);
+    applyPatternToDraft(ed.draft, id);
+    if (state.slots[role]?.midi) state.slots[role].midi.source = "user";
     renderMidiEditor(role);
     commitMidiDraft(role);
+  });
+  root.querySelectorAll(".midi-bar-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const ed = midiEditors[role];
+      if (!ed) return;
+      ed.barIndex = Number(btn.dataset.bar) || 0;
+      renderMidiEditor(role);
+    });
   });
   const lenSel = $(".midi-length", root);
   lenSel?.addEventListener("change", () => {
@@ -3479,32 +3636,25 @@ function openMidiEditor(role) {
     closeMidiEditor(role);
     return;
   }
-  const key = $("#key")?.value || "F minor";
+  const sessionKey = $("#key")?.value || "F minor";
   const existing = state.slots[role]?.midi;
-  const midiRole = baseType(role) === "bass" ? "bass" : "lead";
-  const draft = existing
-    ? {
-        patternId: existing.patternId,
-        octave: existing.octave,
-        key,
-        grid: existing.grid.map((c) => (c ? { ...c } : null)),
-        noteLength: 2,
-        macros: copyMacros(state.slots[role]?.macros),
-        macrosTouched: Array.isArray(state.slots[role]?.macros),
-        macroMeta: null,
-      }
-    : {
-        ...MidiEngine.createMidiState(midiRole, key),
-        noteLength: 2,
-        macros: copyMacros(state.slots[role]?.macros),
-        macrosTouched: Array.isArray(state.slots[role]?.macros),
-        macroMeta: null,
-      };
+  const midiRole = midiRoleForSlot(role);
+  const cloned = existing
+    ? cloneMidi(existing)
+    : MidiEngine.createMidiState(midiRole, sessionKey);
+  const draft = {
+    ...cloned,
+    key: cloned.key || sessionKey,
+    noteLength: 2,
+    macros: copyMacros(state.slots[role]?.macros),
+    macrosTouched: Array.isArray(state.slots[role]?.macros),
+    macroMeta: null,
+  };
 
   const root = buildMidiEditorElement(role);
   const host = $("#midi-editors");
   host?.appendChild(root);
-  midiEditors[role] = { role, draft, root };
+  midiEditors[role] = { role, draft, root, barIndex: 0 };
   bindMidiEditorRoot(role, root);
   renderMidiEditor(role);
   syncMidiEditingClasses();
@@ -3716,15 +3866,29 @@ function renderMidiEditor(role) {
   const ed = midiEditors[role];
   if (!ed || !window.MidiEngine) return;
   const { draft, root } = ed;
-  const key = $("#key")?.value || "F minor";
-  draft.key = key;
+  const src = draft.source;
+  if (src !== "progression" && src !== "user") {
+    draft.key = state.slots[role]?.midi?.key || $("#key")?.value || draft.key || "F minor";
+  }
+  const key = draft.key || slotMidiKey(role);
   if (draft.noteLength == null) draft.noteLength = 2;
-  const midiRole = baseType(role) === "bass" ? "bass" : "lead";
+  const midiRole = midiRoleForSlot(role);
+  const hr = harmonyRole(baseType(role));
+  const is64 = Array.isArray(draft.grid) && draft.grid.length === 64;
+  if (is64 && (ed.barIndex == null || ed.barIndex < 0 || ed.barIndex > 3)) ed.barIndex = 0;
+  const barIndex = is64 ? ed.barIndex || 0 : 0;
+  const offset = is64 ? barIndex * 16 : 0;
+  const barsLabel = is64 || draft.bars === 4 ? "4 bars" : "1 bar";
 
   const title = $(".midi-title", root);
   const sub = $(".midi-subtitle", root);
   if (title) title.textContent = `MIDI · ${role}`;
-  if (sub) sub.textContent = `Single-note · ${key} · type ${baseType(role)}`;
+  if (sub) {
+    sub.textContent =
+      hr === "pad"
+        ? `Voicing · ${barsLabel} · ${key}`
+        : `Single-note · ${barsLabel} · ${key}`;
+  }
 
   const keyDisp = $(".midi-key-display", root);
   if (keyDisp) keyDisp.value = key;
@@ -3758,6 +3922,44 @@ function renderMidiEditor(role) {
   }
   if (lenSel) lenSel.value = String(draft.noteLength || 2);
 
+  const pager = $(".midi-bar-pager", root);
+  if (pager) {
+    pager.hidden = !is64;
+    pager.querySelectorAll(".midi-bar-btn").forEach((btn) => {
+      const b = Number(btn.dataset.bar) || 0;
+      btn.classList.toggle("on", is64 && b === barIndex);
+    });
+  }
+
+  const strip = $(".midi-roman-strip", root);
+  if (strip) {
+    strip.hidden = !is64;
+    if (is64) {
+      strip.innerHTML = "";
+      const chords = state.progression?.chords;
+      for (let i = 0; i < 4; i++) {
+        const cell = document.createElement("button");
+        cell.type = "button";
+        cell.className = "midi-roman" + (i === barIndex ? " on" : "");
+        cell.textContent = chords?.[i]?.roman || String(i + 1);
+        cell.addEventListener("click", () => {
+          if (!midiEditors[role]) return;
+          midiEditors[role].barIndex = i;
+          renderMidiEditor(role);
+        });
+        strip.appendChild(cell);
+      }
+    }
+  }
+
+  const help = $(".midi-help", root);
+  if (help) {
+    help.textContent =
+      hr === "pad"
+        ? "Click cycles inversion · Shift+click cycles the top degree · drag the right edge to change length."
+        : "Click empty to place · click note to remove · Shift+click cycles degree (1–7). Drag the right edge of a note (or Alt+drag) to change length · monophonic.";
+  }
+
   const labels = $(".midi-step-labels", root);
   if (labels) {
     labels.innerHTML = "";
@@ -3772,21 +3974,28 @@ function renderMidiEditor(role) {
   const gridEl = $(".midi-grid", root);
   if (gridEl) {
     gridEl.innerHTML = "";
+    const gridLen = draft.grid?.length || 16;
     const owner = Array(16).fill(null);
-    for (let s = 0; s < 16; s++) {
+    for (let s = 0; s < gridLen; s++) {
       const cell = draft.grid[s];
       if (!cell) continue;
-      const len = MidiEngine.clampLength(s, cell.length || 1, 16);
-      for (let i = 0; i < len && s + i < 16; i++) owner[s + i] = s;
+      const len = MidiEngine.clampLength(s, cell.length || 1, gridLen);
+      for (let i = 0; i < 16; i++) {
+        const g = offset + i;
+        if (s <= g && s + len > g) owner[i] = s;
+      }
     }
     for (let i = 0; i < 16; i++) {
+      const global = offset + i;
       const start = owner[i];
-      const isStart = start === i;
+      const isStart = start === global;
       const isSustain = start != null && !isStart;
-      const cell = isStart ? draft.grid[i] : null;
       const note = start != null ? draft.grid[start] : null;
-      const noteLen = note ? MidiEngine.clampLength(start, note.length || 1, 16) : 0;
-      const isEnd = start != null && i === start + noteLen - 1;
+      const noteLen = note
+        ? MidiEngine.clampLength(start, note.length || 1, gridLen)
+        : 0;
+      const isEnd = start != null && global === start + noteLen - 1;
+      const hasVoices = Boolean(note && Array.isArray(note.voices) && note.voices.length);
 
       const btn = document.createElement("button");
       btn.type = "button";
@@ -3795,27 +4004,54 @@ function renderMidiEditor(role) {
         (isStart ? " on" : "") +
         (isSustain ? " sustain" : "") +
         (isEnd ? " note-end" : "") +
-        (i % 4 === 0 ? " beat" : "");
-      btn.dataset.step = String(i);
+        (i % 4 === 0 ? " beat" : "") +
+        (isStart && (hasVoices || hr === "pad") ? " voices" : "");
+      btn.dataset.step = String(global);
       if (start != null) btn.dataset.noteStart = String(start);
 
       if (isStart && note) {
-        const midi = MidiEngine.degreeToMidi(key, note.degree, draft.octave);
-        btn.textContent = MidiEngine.midiToName(midi);
-        btn.title = `deg ${note.degree + 1} · ${MidiEngine.midiToName(midi)} · ${lengthLabel(noteLen)} — drag right edge to resize`;
+        const voices = MidiEngine.cellVoices(note);
+        const names = voices.map((v) =>
+          MidiEngine.midiToName(
+            MidiEngine.degreeToMidi(
+              key,
+              v.degree ?? note.degree,
+              v.oct ?? note.oct ?? draft.octave,
+              v.alter ?? note.alter ?? 0
+            )
+          )
+        );
+        if (hasVoices || hr === "pad") {
+          btn.textContent = "";
+          for (const name of names) {
+            const span = document.createElement("span");
+            span.className = "midi-voice-name";
+            span.textContent = name;
+            btn.appendChild(span);
+          }
+          btn.title = `${names.join("·")} · ${lengthLabel(noteLen)} — click cycles inversion`;
+        } else {
+          btn.textContent = names[0] || MidiEngine.midiToName(
+            MidiEngine.degreeToMidi(key, note.degree, draft.octave, note.alter || 0)
+          );
+          btn.title = `deg ${note.degree + 1} · ${btn.textContent} · ${lengthLabel(noteLen)} — drag right edge to resize`;
+        }
       } else if (isSustain && note) {
         btn.textContent = "—";
         btn.title = `Sustain · ${lengthLabel(noteLen)} — drag right edge to resize`;
       } else {
         btn.textContent = "·";
-        btn.title = `Empty · click places ${lengthLabel(draft.noteLength || 2)}`;
+        btn.title =
+          hr === "pad"
+            ? "Empty · click places this bar's voicing when a theme exists"
+            : `Empty · click places ${lengthLabel(draft.noteLength || 2)}`;
       }
 
       btn.addEventListener("pointerdown", (ev) => {
-        onMidiCellPointerDown(role, i, ev);
+        onMidiCellPointerDown(role, global, ev);
       });
       btn.addEventListener("pointermove", (ev) => {
-        updateMidiResizeCursor(btn, role, i, ev);
+        updateMidiResizeCursor(btn, role, global, ev);
       });
       btn.addEventListener("pointerleave", () => {
         btn.classList.remove("resize-edge");
@@ -3824,13 +4060,19 @@ function renderMidiEditor(role) {
     }
   }
 
-  const notes = MidiEngine.gridToNotes(draft.grid, key, draft.octave, 1);
+  const notes = MidiEngine.gridToNotes(
+    draft.grid,
+    key,
+    draft.octave,
+    midiLoopBars(draft)
+  );
   const list = $(".midi-note-list", root);
   if (list) {
-    if (!notes.length) list.textContent = "(empty bar)";
+    const inBar = notes.filter((n) => n.step >= offset && n.step < offset + 16);
+    if (!inBar.length) list.textContent = "(empty bar)";
     else {
-      list.textContent = notes
-        .map((n) => `${n.step + 1}:${MidiEngine.midiToName(n.midi)}×${n.duration}`)
+      list.textContent = inBar
+        .map((n) => `${(n.step % 16) + 1}:${MidiEngine.midiToName(n.midi)}×${n.duration}`)
         .join("  ");
     }
   }
@@ -3893,13 +4135,20 @@ function onMidiCellPointerDown(role, step, ev) {
   const grid = ed.draft.grid;
   const hit = MidiEngine.findNoteAt(grid, step);
   const btn = ev.currentTarget;
+  const key = ed.draft.key || slotMidiKey(role);
+  const padLike = isPadOrVoicesEditor(role, hit?.cell);
 
-  // Shift+click on note: cycle scale degree
+  // Shift+click on note: cycle scale degree (top voice on pads)
   if (ev.shiftKey && hit) {
     ev.preventDefault();
     const cell = grid[hit.start];
-    cell.degree = (cell.degree + 1) % 7;
-    markMidiCustom(role);
+    if (padLike && Array.isArray(cell.voices) && cell.voices.length) {
+      const top = cell.voices[cell.voices.length - 1];
+      top.degree = ((top.degree ?? 0) + 1) % 7;
+    } else {
+      cell.degree = (cell.degree + 1) % 7;
+    }
+    markMidiUser(role);
     renderMidiEditor(role);
     commitMidiDraft(role);
     return;
@@ -3914,12 +4163,35 @@ function onMidiCellPointerDown(role, step, ev) {
       startMidiResize(role, hit.start, ev);
       return;
     }
+    if (padLike) {
+      ev.preventDefault();
+      MidiEngine.invertCellVoices(grid[hit.start], ed.draft.octave, key);
+      markMidiUser(role);
+      renderMidiEditor(role);
+      commitMidiDraft(role);
+      return;
+    }
     // Click body/start removes the whole note
     ev.preventDefault();
     grid[hit.start] = null;
-    markMidiCustom(role);
+    markMidiUser(role);
     renderMidiEditor(role);
     commitMidiDraft(role);
+    return;
+  }
+
+  // Empty pad / voices cell: never place() — seed bar voicing if a theme exists
+  if (isPadOrVoicesEditor(role, null)) {
+    ev.preventDefault();
+    const bar = Math.floor(step / 16);
+    const voices = voicesFromProgressionBar(bar, ed.draft.octave, key);
+    if (voices && voices.length) {
+      const start = bar * 16;
+      MidiEngine.placeVoices(grid, start, voices, 16, 90);
+      markMidiUser(role);
+      renderMidiEditor(role);
+      commitMidiDraft(role);
+    }
     return;
   }
 
@@ -3927,7 +4199,7 @@ function onMidiCellPointerDown(role, step, ev) {
   ev.preventDefault();
   const len = Math.max(1, Math.min(16, Number(ed.draft.noteLength) || 2));
   MidiEngine.place(grid, step, 0, len, 100);
-  markMidiCustom(role);
+  markMidiUser(role);
   renderMidiEditor(role);
   commitMidiDraft(role);
 }
@@ -3951,12 +4223,12 @@ function startMidiResize(role, noteStart, ev) {
     if (!midiEditors[role]) return;
     const grid = ed.draft.grid;
     if (!grid[noteStart]) return;
-    const endStep = stepFromClientX(gridEl, clientX);
+    const endStep = stepFromClientX(gridEl, clientX) + editorStepOffset(role);
     const newLen = Math.max(1, endStep - noteStart + 1);
     const cur = grid[noteStart].length || 1;
     if (cur === newLen) return;
     MidiEngine.setNoteLength(grid, noteStart, newLen);
-    markMidiCustom(role);
+    markMidiUser(role);
     // Keep resize flag through re-render (DOM rebuild)
     ed._resizing = true;
     renderMidiEditor(role);
@@ -3988,19 +4260,13 @@ function commitMidiDraft(role, opts = {}) {
   const ed = midiEditors[role];
   if (!ed || !window.MidiEngine) return;
   const { draft } = ed;
-  const key = $("#key")?.value || "F minor";
-  draft.key = key;
   const octEl = midiQ(role, ".midi-octave");
   draft.octave = Number(octEl?.value ?? draft.octave);
+  const key = draft.key || slotMidiKey(role);
   // Snapshot before write (coalesced for rapid edits)
   pushMidiUndo(role);
   if (!state.slots[role]) state.slots[role] = {};
-  state.slots[role].midi = {
-    patternId: draft.patternId,
-    octave: draft.octave,
-    key,
-    grid: draft.grid.map((c) => (c ? { ...c } : null)),
-  };
+  state.slots[role].midi = cloneMidi(draft);
   if (draft.macrosTouched && Array.isArray(draft.macros)) {
     state.slots[role].macros = draft.macros.slice(0, 8).map(max01);
   }
@@ -4302,16 +4568,60 @@ function readInstrumentsFromDom() {
   }
 }
 
-/** Deep-ish clone of slot MIDI for save. */
+/** Deep clone of slot MIDI — full contract (bars/source/locked/alter/voices). */
 function cloneMidi(midi) {
   if (!midi || typeof midi !== "object") return null;
   return {
     patternId: midi.patternId || "custom",
     octave: midi.octave ?? 3,
     key: midi.key || null,
+    bars: midi.bars === 4 || (Array.isArray(midi.grid) && midi.grid.length === 64) ? 4 : 1,
+    source: midi.source || "pattern",
+    locked: Boolean(midi.locked),
     grid: Array.isArray(midi.grid)
-      ? midi.grid.map((c) => (c && typeof c === "object" ? { ...c } : null))
+      ? midi.grid.map((c) => {
+          if (!c || typeof c !== "object") return null;
+          const cell = {
+            degree: c.degree,
+            length: c.length,
+            vel: c.vel,
+          };
+          if (c.alter) cell.alter = c.alter;
+          if (Array.isArray(c.voices) && c.voices.length) {
+            cell.voices = c.voices.map((v) => ({ ...v }));
+          }
+          return cell;
+        })
       : null,
+  };
+}
+
+function cloneProgression(prog) {
+  if (!prog || typeof prog !== "object") return null;
+  return {
+    version: prog.version ?? 1,
+    bars: prog.bars ?? 4,
+    key: prog.key || null,
+    recipe_id: prog.recipe_id || null,
+    label: prog.label || "",
+    locked: Boolean(prog.locked),
+    style_used: prog.style_used || "",
+    diced_at: prog.diced_at || null,
+    chords: Array.isArray(prog.chords)
+      ? prog.chords.map((c) => {
+          if (!c || typeof c !== "object") return null;
+          return {
+            bar: c.bar,
+            roman: c.roman,
+            root_degree: c.root_degree,
+            quality: c.quality,
+            root_pc: c.root_pc,
+            pcs: Array.isArray(c.pcs) ? c.pcs.slice() : [],
+            intervals: Array.isArray(c.intervals) ? c.intervals.slice() : [],
+            alters: c.alters && typeof c.alters === "object" ? { ...c.alters } : {},
+          };
+        })
+      : [],
   };
 }
 
@@ -4367,6 +4677,7 @@ function captureDocSnapshot() {
     bpm: getBpm(),
     key: $("#key")?.value || "F minor",
     style: ($("#style")?.value || "").trim(),
+    progression: cloneProgression(state.progression),
   };
 }
 
@@ -4404,6 +4715,7 @@ function restoreDocSnapshot(snap) {
   try {
     stopAll();
     closeAllMidiEditors();
+    state.progression = cloneProgression(snap.progression);
     const list = $("#slot-list");
     if (!list) return;
     list.innerHTML = "";
@@ -4467,6 +4779,7 @@ function restoreDocSnapshot(snap) {
     markWaveDirty();
     drawWaveformFrame();
   } finally {
+    renderThemePanel();
     undoSuspended = false;
   }
 }
@@ -5323,12 +5636,7 @@ async function doExportLoop() {
       kind: s.kind || null,
     };
     if (s.midi?.grid) {
-      out.midi = {
-        patternId: s.midi.patternId,
-        octave: s.midi.octave ?? 3,
-        key: s.midi.key || $("#key")?.value || "F minor",
-        grid: s.midi.grid.map((c) => (c ? { ...c } : null)),
-      };
+      out.midi = cloneMidi(s.midi);
     }
     if (Array.isArray(s.macros) && s.macros.length) {
       out.macros = s.macros.slice(0, 8).map(max01);

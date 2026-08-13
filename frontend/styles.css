@@ -2797,6 +2797,81 @@ dialog:has(.dialog-card-wide) {
   margin-bottom: 14px;
 }
 
+.midi-bar-pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+
+.midi-bar-pager[hidden],
+.midi-roman-strip[hidden] {
+  display: none;
+}
+
+.midi-bar-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  margin-right: 2px;
+}
+
+.midi-bar-btn {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-slot);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.midi-bar-btn:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-slot-hover);
+}
+
+.midi-bar-btn.on {
+  border-color: var(--accent-dim);
+  background: rgba(110, 231, 183, 0.16);
+  color: var(--accent);
+}
+
+.midi-roman-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  margin: 0 0 10px;
+}
+
+.midi-roman {
+  min-height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.midi-roman:hover {
+  border-color: var(--border-strong);
+}
+
+.midi-roman.on {
+  border-color: var(--accent-dim);
+  background: rgba(110, 231, 183, 0.14);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-glow);
+}
+
 .midi-grid-wrap {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -2899,6 +2974,23 @@ dialog:has(.dialog-card-wide) {
 
 .midi-cell.beat {
   border-color: #3d4555;
+}
+
+.midi-cell.voices {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 1px;
+  font-size: 0.55rem;
+  line-height: 1.1;
+  min-height: 52px;
+  aspect-ratio: auto;
+  padding: 3px 2px;
+}
+
+.midi-cell.voices .midi-voice-name {
+  display: block;
 }
 
 .midi-help {
