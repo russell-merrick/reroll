@@ -32,7 +32,14 @@ from pydantic import BaseModel, Field
 from .catalog import CATALOG
 from .export_loop import export_loop
 from .generate import catalog_style_suggestions, generate_loop, generate_tracks, reroll_slot
-from .harmony import RECIPES, apply_harmony, dice_chords, dice_lead
+from .harmony import (
+    RECIPES,
+    apply_harmony,
+    dice_chords,
+    dice_lead,
+    reconcile_progression,
+    validate_progression,
+)
 from .persist import catalog_stats, default_db_path, load_catalog, save_catalog
 from .scanner import DEFAULT_SAMPLE_ROOTS, DEFAULT_SERUM_ROOTS, scan_library
 from .timing import LOOP_BARS
@@ -133,6 +140,7 @@ class SaveLoopRequest(BaseModel):
     track_order: list[str] = Field(default_factory=list)
     slots: dict[str, Any] = Field(default_factory=dict)
     id: str | None = None  # overwrite existing if provided
+    progression: dict[str, Any] | None = None
 
 
 class ExportTrack(BaseModel):
@@ -1508,6 +1516,7 @@ def _read_loop_file(path: Path) -> dict[str, Any]:
 
 def _loop_summary(data: dict[str, Any]) -> dict[str, Any]:
     order = data.get("track_order") or []
+    prog = data.get("progression")
     return {
         "id": data.get("id"),
         "name": data.get("name") or "Untitled",
@@ -1516,6 +1525,7 @@ def _loop_summary(data: dict[str, Any]) -> dict[str, Any]:
         "style": data.get("style"),
         "saved_at": data.get("saved_at"),
         "track_count": len(order) if isinstance(order, list) else 0,
+        "has_progression": isinstance(prog, dict) and bool(prog),
     }
 
 
@@ -1586,6 +1596,23 @@ def save_loop(body: SaveLoopRequest) -> dict[str, Any]:
         loop_id = f"{_slug_name(name)}-{uuid.uuid4().hex[:8]}"
         path = _loop_path(loop_id)
 
+    prev: dict[str, Any] | None = None
+    if path.is_file():
+        try:
+            prev = _read_loop_file(path)
+        except HTTPException:
+            prev = None
+
+    # v1: None/missing keeps previous theme. No explicit-null clear.
+    stored_prog: dict[str, Any] | None = None
+    try:
+        if body.progression is not None:
+            stored_prog = validate_progression(body.progression)
+        elif prev and isinstance(prev.get("progression"), dict):
+            stored_prog = reconcile_progression(prev["progression"], body.key)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     doc: dict[str, Any] = {
         "id": loop_id,
         "name": name,
@@ -1598,6 +1625,8 @@ def save_loop(body: SaveLoopRequest) -> dict[str, Any]:
         "saved_at": now,
         "version": 1,
     }
+    if stored_prog is not None:
+        doc["progression"] = stored_prog
     path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
     return {"ok": True, **_loop_summary(doc)}
 

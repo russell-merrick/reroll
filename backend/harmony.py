@@ -738,6 +738,33 @@ def apply_key(progression: dict[str, Any], key: str) -> dict[str, Any]:
     return out
 
 
+def validate_progression(doc: dict[str, Any]) -> dict[str, Any]:
+    """Accept a 4-bar theme. Unknown recipe_id is ok when chords is length 4."""
+    if not isinstance(doc, dict) or not doc:
+        raise ValueError("progression required")
+    bars = doc.get("bars")
+    if bars is not None and int(bars) != BARS:
+        raise ValueError("progression bars must be 4")
+    chords = doc.get("chords")
+    if chords is not None:
+        if not isinstance(chords, list) or len(chords) != BARS:
+            raise ValueError("progression bars must be 4")
+    elif doc.get("recipe_id") not in RECIPES:
+        raise ValueError("progression bars must be 4")
+    out = dict(doc)
+    out["bars"] = BARS
+    return out
+
+
+def reconcile_progression(
+    doc: dict[str, Any] | None, key: str
+) -> dict[str, Any] | None:
+    """Force bars=4 and respell to `key`'s tonic (still Aeolian)."""
+    if not doc:
+        return None
+    return apply_key(validate_progression(doc), key)
+
+
 def _track_midi(track: dict[str, Any]) -> dict[str, Any] | None:
     midi = track.get("midi")
     return midi if isinstance(midi, dict) else None

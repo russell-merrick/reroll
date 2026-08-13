@@ -5120,7 +5120,7 @@ function serializeLoop(name) {
     };
   }
   readSerumEngineOptionsFromDom();
-  return {
+  const payload = {
     name: String(name || "").trim(),
     bpm: getBpm(),
     key: $("#key")?.value || "F minor",
@@ -5136,6 +5136,9 @@ function serializeLoop(name) {
     slots,
     id: state.currentLoopId || null,
   };
+  const prog = cloneProgression(state.progression);
+  if (prog) payload.progression = prog;
+  return payload;
 }
 
 function defaultLoopName() {
@@ -5195,9 +5198,6 @@ function applyLoadedLoop(doc) {
   state.trackOrder = [];
   state.slots = {};
   trackSeq = 0;
-  // PR 5 restores from the document; until then drop a leftover theme
-  state.progression = null;
-  renderThemePanel();
 
   const bpmEl = $("#bpm");
   const keyEl = $("#key");
@@ -5296,6 +5296,9 @@ function applyLoadedLoop(doc) {
   if (!order.length) {
     initDefaultTracks();
   }
+  // After tracks (initDefaultTracks clears theme). Missing key → — no theme —.
+  state.progression = cloneProgression(doc.progression);
+  renderThemePanel();
 }
 
 function formatSavedAt(iso) {
