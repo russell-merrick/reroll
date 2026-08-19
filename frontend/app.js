@@ -183,9 +183,10 @@ function markMidiUser(role) {
 
 function themePlayBar() {
   if (!isPlaying) return -1;
-  const steps = scheduler.totalSteps || LOOP_BARS * 16;
+  const n = getLoopBars();
+  const steps = scheduler.totalSteps || n * 16;
   const step = Math.floor(getCycleProgress() * steps);
-  return Math.min(3, Math.max(0, Math.floor(step / 16)));
+  return Math.min(n - 1, Math.max(0, Math.floor(step / 16)));
 }
 
 function highlightThemeBar() {
@@ -200,6 +201,17 @@ function highlightThemeBar() {
 
 function isThemeLocked() {
   return Boolean(state.themeLocked);
+}
+
+/** Track lock: freeze preset and MIDI on Reroll. */
+function isTrackLocked(role) {
+  return Boolean(state.slots[role]?.locked);
+}
+
+/** Preset lock (or track lock): freeze the sound; MIDI may still change. */
+function isPresetFrozen(role) {
+  const s = state.slots[role];
+  return Boolean(s?.locked || s?.presetLocked);
 }
 
 /** Stamp lock onto whatever progression object we adopt. */
@@ -248,22 +260,27 @@ function renderThemePanel() {
       romansEl.appendChild(empty);
     } else {
       const bar = themePlayBar();
+      const loopBars = getLoopBars();
       for (let i = 0; i < 4; i++) {
         const cell = document.createElement("button");
         cell.type = "button";
         const muted = chords[i]?.enabled === false;
+        const unused = i >= loopBars;
         cell.className =
           "theme-roman" +
-          (isPlaying && i === bar ? " on" : "") +
-          (muted ? " muted" : "");
+          (isPlaying && i === bar && !unused ? " on" : "") +
+          (muted ? " muted" : "") +
+          (unused ? " unused" : "");
         cell.dataset.bar = String(i);
         cell.textContent = chords[i]?.roman || "—";
-        cell.disabled = locked;
-        cell.dataset.tip = locked
-          ? "Chords locked — Reroll won't change these"
-          : muted
-            ? "Off — loop wraps to the first on chord · click to enable · hold to change"
-            : "Click to turn off (loop restarts) · hold to change chord";
+        cell.disabled = locked || unused;
+        cell.dataset.tip = unused
+          ? `Bar ${i + 1} unused — set Bars to ${i < 2 ? 2 : 4}`
+          : locked
+            ? "Chords locked — Reroll won't change these"
+            : muted
+              ? "Off — loop wraps to the first on chord · click to enable · hold to change"
+              : "Click to turn off (loop restarts) · hold to change chord";
         bindThemeRomanCell(cell, i);
         romansEl.appendChild(cell);
       }
@@ -331,8 +348,9 @@ let previewGen = 0;
 /** @type {Record<string, GainNode>} */
 let trackGains = {};
 
-/** Session loop length in bars — change this (and restart play) to try 8 later. */
+/** Max session loop length. Live length is 1, 2, or 4 via #bars. */
 const LOOP_BARS = 4;
+const ALLOWED_LOOP_BARS = [1, 2, 4];
 
 /** Look-ahead loop scheduler — reads BPM live so tempo can change mid-play. */
 const scheduler = {
@@ -345,11 +363,11 @@ const scheduler = {
   phraseRoles: {},
   nextStep: 0,
   nextNoteTime: 0,
-  /** LOOP_BARS × 16 sixteenths (4 bars → 16 quarter-note kicks). */
-  totalSteps: LOOP_BARS * 16,
+  /** Live BARS × 16 sixteenths (default 1 bar). */
+  totalSteps: 16,
   /** @type {ReturnType<typeof setInterval> | null} */
   timerId: null,
-  bars: LOOP_BARS,
+  bars: 1,
 };
 
 const LOOKAHEAD_SEC = 0.15;
@@ -393,6 +411,43 @@ function getBpm() {
   const n = Number($("#bpm")?.value || 140);
   if (!Number.isFinite(n)) return 140;
   return Math.min(200, Math.max(60, n));
+}
+
+/** Session loop length: 1, 2, or 4 bars. */
+function getLoopBars() {
+  const n = Number($("#bars")?.value);
+  if (n === 1 || n === 2 || n === 4) return n;
+  if (scheduler.bars === 1 || scheduler.bars === 2 || scheduler.bars === 4) {
+    return scheduler.bars;
+  }
+  return 1;
+}
+
+function snapLoopBars(raw, prev) {
+  const n = Number(raw);
+  if (n === 1 || n === 2 || n === 4) return n;
+  const from = prev === 1 || prev === 2 || prev === 4 ? prev : getLoopBars();
+  if (!Number.isFinite(n)) return from;
+  if (n > from) {
+    return ALLOWED_LOOP_BARS.find((a) => a > from) ?? 4;
+  }
+  const down = [...ALLOWED_LOOP_BARS].reverse().find((a) => a < from);
+  return down ?? 1;
+}
+
+function applyLoopBars(n) {
+  const bars = n === 1 || n === 2 || n === 4 ? n : snapLoopBars(n, getLoopBars());
+  const el = $("#bars");
+  if (el) el.value = String(bars);
+  scheduler.bars = bars;
+  scheduler.totalSteps = bars * 16;
+  if (scheduler.nextStep >= scheduler.totalSteps) {
+    scheduler.nextStep %= scheduler.totalSteps;
+  }
+  for (const ed of Object.values(midiEditors)) {
+    if (ed && ed.barIndex >= bars) ed.barIndex = 0;
+  }
+  return bars;
 }
 
 function secPer16th() {
@@ -767,9 +822,11 @@ function drawWaveformFrame() {
     if (isPlaying) {
       const bar = Math.min(bars, Math.floor(progress * bars) + 1);
       const beat = Math.floor(((progress * bars) % 1) * 4) + 1;
-      meta.textContent = `${bpm} BPM · ${bars} bars · bar ${bar}.${beat}`;
+      const barWord = bars === 1 ? "bar" : "bars";
+      meta.textContent = `${bpm} BPM · ${bars} ${barWord} · bar ${bar}.${beat}`;
     } else if (any) {
-      meta.textContent = `Stopped · ${bars} bars @ ${bpm} BPM`;
+      const barWord = bars === 1 ? "bar" : "bars";
+      meta.textContent = `Stopped · ${bars} ${barWord} @ ${bpm} BPM`;
     } else {
       meta.textContent = "Idle · play to build";
     }
@@ -954,10 +1011,15 @@ function tipForButton(btn) {
       ? "Unlock chords — Reroll may change the progression"
       : "Lock chords — Reroll keeps this progression";
   }
+  if (btn.classList.contains("preset-lock")) {
+    return btn.dataset.tip || (btn.classList.contains("on")
+      ? "Unlock preset — Reroll may change the sound"
+      : "Lock preset — Reroll may still change MIDI");
+  }
   if (btn.classList.contains("lock")) {
     return btn.classList.contains("on")
-      ? "Unlock — allow Reroll to change this track"
-      : "Lock — keep this sound on Reroll";
+      ? "Unlock — allow Reroll to change preset and MIDI"
+      : "Lock — keep preset and MIDI on Reroll";
   }
   if (btn.classList.contains("dice")) return "Reroll this track only";
   if (btn.classList.contains("loop-delete")) return "Delete this saved loop";
@@ -994,6 +1056,7 @@ function initBottomTips() {
       "#style",
       "Leans Reroll picks and chord recipes. No preference = random",
     ],
+    ["#bars", "Loop length — 1, 2, or 4 bars (waveform, chords, MIDI)"],
   ].forEach(([sel, tip]) => {
     const el = $(sel);
     if (el) el.dataset.tip = tip;
@@ -1571,8 +1634,11 @@ function syncPreviewBtn(role) {
 
 function midiLoopBars(midi) {
   if (!midi) return 1;
-  if (midi.bars === 4 || (Array.isArray(midi.grid) && midi.grid.length === 64)) return 4;
-  return midi.bars || (midi.grid?.length > 16 ? 4 : 1);
+  let n = 1;
+  if (midi.bars === 4 || (Array.isArray(midi.grid) && midi.grid.length === 64)) n = 4;
+  else if (midi.bars === 2 || (Array.isArray(midi.grid) && midi.grid.length === 32)) n = 2;
+  else n = midi.bars || (midi.grid?.length > 16 ? 4 : 1);
+  return Math.min(n, getLoopBars());
 }
 
 function scheduleMidiPreviewBar(role, when) {
@@ -2633,6 +2699,28 @@ function scheduleSerumRefreshForNewBpm() {
   }, 200);
 }
 
+function onBarsInput() {
+  const el = $("#bars");
+  const prev = scheduler.bars === 1 || scheduler.bars === 2 || scheduler.bars === 4
+    ? scheduler.bars
+    : 1;
+  const next = snapLoopBars(el?.value, prev);
+  if (el) el.value = String(next);
+  if (next === prev) return;
+  applyLoopBars(next);
+  renderThemePanel();
+  for (const id of Object.keys(midiEditors)) renderMidiEditor(id);
+  markWaveDirty();
+  if (!isPlaying) {
+    drawWaveformFrame();
+    setStatus(`Loop ${next} bar${next === 1 ? "" : "s"}`);
+    return;
+  }
+  invalidateSerumStemsForBpmChange();
+  scheduleSerumRefreshForNewBpm();
+  setStatus(`Loop ${next} bar${next === 1 ? "" : "s"} · re-bouncing Serum…`);
+}
+
 function onBpmInput() {
   markWaveDirty();
   if (!isPlaying) {
@@ -2717,8 +2805,23 @@ function applySlot(role, data) {
   const slot = ensureSlotEl(role);
   if (!slot) return;
 
+  const prevSlot = state.slots[role] || {};
+  // Preset lock / track lock: never replace the sound from a generate/dice payload.
+  if ((prevSlot.locked || prevSlot.presetLocked) && prevSlot.path) {
+    data = {
+      ...data,
+      path: prevSlot.path,
+      name: prevSlot.name,
+      kind: prevSlot.kind,
+      pack: prevSlot.pack,
+      meta: prevSlot.meta,
+      ext: prevSlot.ext,
+      empty: prevSlot.empty,
+    };
+  }
+
   // Drop cached buffer if path changed
-  const prev = state.slots[role]?.path;
+  const prev = prevSlot.path;
   const pathChanged = Boolean(prev && data.path && prev !== data.path);
   if (pathChanged) {
     bufferCache.delete(prev);
@@ -2739,11 +2842,15 @@ function applySlot(role, data) {
     keepMacros = copyMacros(state.slots[role]?.macros);
   }
   const keepTrackType =
-    state.slots[role]?.type || data.type || data.role || baseType(role);
+    prevSlot.type || data.type || data.role || baseType(role);
+  const prevPresetLocked = Boolean(prevSlot.presetLocked);
+  const incomingPresetLocked =
+    data.presetLocked !== undefined ? data.presetLocked : data.preset_locked;
   state.slots[role] = {
     ...data,
     type: keepTrackType,
     locked: Boolean(state.slots[role]?.locked || data.locked),
+    presetLocked: Boolean(prevPresetLocked || incomingPresetLocked),
     muted,
     solo,
     midi: keepMidi,
@@ -2915,6 +3022,7 @@ const STYLE_PRESETS = [
   "Prog house",
   "Trance",
   "Techno",
+  "Peak-time techno",
   "House",
 ];
 
@@ -3017,10 +3125,12 @@ function midiShapeFrom(midi) {
   };
 }
 
-function harmonyTracksPayload(onlyId) {
+function harmonyTracksPayload(onlyId, opts = {}) {
+  const skipLocked = Boolean(opts.skipLocked);
   return activeTrackIds()
     .filter((id) => isSerumTrack(id))
     .filter((id) => !onlyId || id === onlyId)
+    .filter((id) => !skipLocked || !isTrackLocked(id))
     .map((id) => {
       const s = state.slots[id] || {};
       return {
@@ -3033,10 +3143,11 @@ function harmonyTracksPayload(onlyId) {
     });
 }
 
-function applyHarmonyMidi(midiMap) {
+function applyHarmonyMidi(midiMap, opts = {}) {
   const ids = Object.keys(midiMap || {});
   for (const id of ids) {
     if (!state.slots[id]) continue;
+    if (opts.skipLocked && isTrackLocked(id)) continue;
     const keep = midiShapeFrom(state.slots[id].midi);
     const next = cloneMidi(midiMap[id]);
     if (next) Object.assign(next, keep);
@@ -3075,12 +3186,40 @@ function rewrittenRoleLabels(ids) {
   return [...new Set(labels)];
 }
 
+function hasUnlockedHarmonyRole(role) {
+  return activeTrackIds().some(
+    (id) =>
+      isSerumTrack(id) &&
+      !isTrackLocked(id) &&
+      harmonyRole(baseType(id)) === role
+  );
+}
+
+/**
+ * Reroll MIDI for tracks that are not fully locked.
+ * Theme lock keeps the chord progression; patterns still change.
+ * Lead is not rewritten by dice-chords, so Reroll dices it separately.
+ */
+async function rerollUnlockedMidi() {
+  const themeFrozen = Boolean(state.progression && isThemeLocked());
+  if (!themeFrozen) {
+    await diceChords({ skipUndo: true });
+  }
+  if (!state.progression) return;
+  if (themeFrozen && hasUnlockedHarmonyRole("bass")) {
+    await diceBass({ skipUndo: true });
+  }
+  if (hasUnlockedHarmonyRole("lead")) {
+    await diceLead({ skipUndo: true });
+  }
+}
+
 async function diceChords(opts = {}) {
   if (state.progression && isThemeLocked()) {
     setStatus("Chords locked — unlock to reroll them");
     return;
   }
-  const tracks = harmonyTracksPayload();
+  const tracks = harmonyTracksPayload(undefined, { skipLocked: true });
   const res = await api("/api/harmony/dice-chords", {
     method: "POST",
     body: JSON.stringify({
@@ -3093,13 +3232,20 @@ async function diceChords(opts = {}) {
   });
   if (!opts.skipUndo) pushUndo("Dice chords");
   setProgression(res.progression);
-  const ids = applyHarmonyMidi(res.midi || {});
+  const ids = applyHarmonyMidi(res.midi || {}, { skipLocked: true });
   console.info("Theme apply", res.progression?.recipe_id, ids);
   renderThemePanel();
   const label =
     res.progression?.label || formatRomans(res.progression) || "theme";
   if (!ids.length) {
-    setStatus(`Theme · ${label} · Add a Bass (Serum) track`);
+    const hasBass = activeTrackIds().some(
+      (id) => harmonyRole(baseType(id)) === "bass"
+    );
+    setStatus(
+      hasBass
+        ? `Theme · ${label}`
+        : `Theme · ${label} · Add a Bass (Serum) track`
+    );
     return;
   }
   const who = rewrittenRoleLabels(ids).join(", ") || ids.join(", ");
@@ -3122,13 +3268,17 @@ async function diceBass(opts = {}) {
     setStatus("No theme — Dice chords first");
     return;
   }
+  if (opts.trackId && isTrackLocked(opts.trackId)) {
+    setStatus(`${opts.trackId} is locked — unlock to change MIDI`);
+    return;
+  }
   const res = await api("/api/harmony/dice-bass", {
     method: "POST",
     body: JSON.stringify({
       key: $("#key")?.value || "F minor",
       style: ($("#style")?.value || "").trim(),
       progression: cloneProgression(state.progression),
-      tracks: harmonyTracksPayload(opts.trackId),
+      tracks: harmonyTracksPayload(opts.trackId, { skipLocked: true }),
     }),
   });
   const midi = res.midi || {};
@@ -3138,7 +3288,7 @@ async function diceBass(opts = {}) {
     return;
   }
   if (!opts.skipUndo) pushUndo("Dice bass");
-  applyHarmonyMidi(midi);
+  applyHarmonyMidi(midi, { skipLocked: true });
   console.info("Theme bass", state.progression?.recipe_id, ids);
   const label =
     state.progression?.label || formatRomans(state.progression) || "theme";
@@ -3151,13 +3301,17 @@ async function diceLead(opts = {}) {
     setStatus("No theme — Dice chords first");
     return;
   }
+  if (opts.trackId && isTrackLocked(opts.trackId)) {
+    setStatus(`${opts.trackId} is locked — unlock to change MIDI`);
+    return;
+  }
   const res = await api("/api/harmony/dice-lead", {
     method: "POST",
     body: JSON.stringify({
       key: $("#key")?.value || "F minor",
       style: ($("#style")?.value || "").trim(),
       progression: cloneProgression(state.progression),
-      tracks: harmonyTracksPayload(opts.trackId),
+      tracks: harmonyTracksPayload(opts.trackId, { skipLocked: true }),
     }),
   });
   const midi = res.midi || {};
@@ -3167,7 +3321,7 @@ async function diceLead(opts = {}) {
     return;
   }
   if (!opts.skipUndo) pushUndo("Dice lead");
-  applyHarmonyMidi(midi);
+  applyHarmonyMidi(midi, { skipLocked: true });
   console.info("Theme lead", state.progression?.recipe_id, ids);
   const label =
     state.progression?.label || formatRomans(state.progression) || "theme";
@@ -3189,8 +3343,15 @@ function initThemePanel() {
 }
 
 const THEME_ROMANS = ["i", "ii", "III", "iv", "v", "V", "VI", "VII"];
+const THEME_ROMANS_PEAK = ["i", "VI", "VII", "sus4"];
 let themeHoldTimer = null;
 let themeHoldOpened = false;
+
+function themeRomansForStyle() {
+  const s = ($("#style")?.value || "").toLowerCase();
+  if (s.includes("peak")) return THEME_ROMANS_PEAK;
+  return THEME_ROMANS;
+}
 
 function closeThemeChordPicker() {
   $("#theme-chord-picker")?.remove();
@@ -3203,14 +3364,17 @@ function openThemeChordPicker(bar, anchor) {
   picker.className = "theme-chord-picker";
   picker.setAttribute("role", "listbox");
   const cur = state.progression?.chords?.[bar]?.roman;
-  for (const r of THEME_ROMANS) {
+  const romans = themeRomansForStyle();
+  const opts = romans.includes(cur) || !cur ? romans : [cur, ...romans];
+  for (const r of opts) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "theme-chord-opt" + (r === cur ? " current" : "");
     btn.textContent = r;
-    btn.addEventListener("click", (ev) => {
+    btn.addEventListener("pointerdown", (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
+      themeHoldOpened = false;
       closeThemeChordPicker();
       editThemeChord({ bar, roman: r }).catch((e) =>
         setStatus(`Set chord failed: ${e.message}`)
@@ -3228,6 +3392,7 @@ function openThemeChordPicker(bar, anchor) {
 function bindThemeRomanCell(cell, bar) {
   cell.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;
+    if (bar >= getLoopBars()) return;
     if (isThemeLocked()) return;
     themeHoldOpened = false;
     themeHoldTimer = setTimeout(() => {
@@ -3241,6 +3406,7 @@ function bindThemeRomanCell(cell, bar) {
     clearTimeout(themeHoldTimer);
     themeHoldTimer = null;
     if (themeHoldOpened) return;
+    if (bar >= getLoopBars()) return;
     const chords = state.progression?.chords || [];
     const on = chords[bar]?.enabled !== false;
     const nOn = chords.filter((c) => c && c.enabled !== false).length;
@@ -3261,6 +3427,7 @@ function bindThemeRomanCell(cell, bar) {
 
 async function editThemeChord({ bar, roman, enabled }) {
   if (!state.progression) return;
+  if (bar >= getLoopBars()) return;
   const res = await api("/api/harmony/set-chords", {
     method: "POST",
     body: JSON.stringify({
@@ -3496,6 +3663,7 @@ function tracksPayload() {
       id,
       type: baseType(id),
       locked: Boolean(s.locked),
+      preset_locked: Boolean(s.presetLocked),
       path: s.path || null,
       name: s.name || "",
       kind: s.kind || null,
@@ -3582,6 +3750,7 @@ function collectUserSettings() {
   if (themeEl) state.options.theme = normalizeTheme(themeEl.value);
   return {
     bpm: getBpm(),
+    bars: getLoopBars(),
     key: $("#key")?.value || "F minor",
     style: ($("#style")?.value || "").trim(),
     filterRisers: Boolean(state.options.filterRisers),
@@ -3603,6 +3772,9 @@ function applyUserSettings(s) {
     const bpmEl = $("#bpm");
     const n = Number(s.bpm);
     if (bpmEl && Number.isFinite(n)) bpmEl.value = String(Math.min(200, Math.max(60, n)));
+  }
+  if (s.bars != null || s.loopBars != null) {
+    applyLoopBars(snapLoopBars(s.bars ?? s.loopBars, 1));
   }
   if (s.key != null && $("#key")) {
     const keyEl = $("#key");
@@ -3741,11 +3913,17 @@ async function doGenerate(opts = {}) {
   pushUndo("Reroll");
   for (const [role, slot] of Object.entries(loop.slots || {})) {
     if (!state.slots[role]) continue;
-    const locked = Boolean(state.slots[role]?.locked);
+    const locked = isTrackLocked(role);
+    const presetLocked = Boolean(state.slots[role]?.presetLocked);
     const prevMidi = state.slots[role]?.midi;
     const prevType = state.slots[role]?.serumType;
     const prevTrackType = state.slots[role]?.type;
-    applySlot(role, { ...slot, locked, type: prevTrackType || slot.role });
+    applySlot(role, {
+      ...slot,
+      locked,
+      presetLocked,
+      type: prevTrackType || slot.role,
+    });
     if (isSerumTrack(role)) {
       if (prevType) state.slots[role].serumType = prevType;
       if (prevTrackType) state.slots[role].type = prevTrackType;
@@ -3754,15 +3932,13 @@ async function doGenerate(opts = {}) {
       else if (!locked) {
         state.slots[role].midi = prevMidi || ensureSlotMidi(role);
       }
-      applySlot(role, { ...state.slots[role], locked });
+      applySlot(role, { ...state.slots[role], locked, presetLocked });
     }
   }
   try {
-    if (!(state.progression && isThemeLocked())) {
-      await diceChords({ skipUndo: true });
-    }
+    await rerollUnlockedMidi();
   } catch (e) {
-    console.warn("reroll theme:", e);
+    console.warn("reroll midi:", e);
   }
   const summary = `Rerolled · ${loop.bpm} BPM · ${loop.key} · ${loop.style} · ${serumEngineLabel(eng)}${
     isThemeLocked() ? " · chords locked" : ""
@@ -3786,8 +3962,29 @@ async function doGenerate(opts = {}) {
 }
 
 async function doReroll(role) {
-  if (state.slots[role]?.locked) {
+  if (isTrackLocked(role)) {
     setStatus(`${role} is locked — unlock first`);
+    return;
+  }
+  if (isPresetFrozen(role)) {
+    if (!isSerumTrack(role)) {
+      setStatus(`${role} preset locked — unlock to change the sample`);
+      return;
+    }
+    if (!state.progression) {
+      setStatus("Preset locked — Dice chords first to change MIDI");
+      return;
+    }
+    const hr = harmonyRole(baseType(role));
+    if (hr === "bass") {
+      await diceBass({ trackId: role });
+      return;
+    }
+    if (hr === "lead") {
+      await diceLead({ trackId: role });
+      return;
+    }
+    setStatus(`Preset locked · ${role} — Reroll keeps this sound`);
     return;
   }
   const t = baseType(role);
@@ -3937,7 +4134,8 @@ function applyPatternToDraft(draft, patternId) {
 function editorStepOffset(role) {
   const ed = midiEditors[role];
   if (!ed?.draft?.grid || ed.draft.grid.length !== 64) return 0;
-  return Math.max(0, Math.min(3, ed.barIndex || 0)) * 16;
+  const maxBar = Math.max(0, getLoopBars() - 1);
+  return Math.max(0, Math.min(maxBar, ed.barIndex || 0)) * 16;
 }
 
 function isPadOrVoicesEditor(role, cell) {
@@ -4017,12 +4215,12 @@ function buildMidiEditorElement(role) {
         <button type="button" class="btn ghost" data-action="clear" data-tip="Clear all steps">Clear</button>
       </div>
       <div class="midi-shape" hidden>
-        <label class="field theme-slider" data-tip="How many hits. Sparse = bounce / holes. Dense = 16th runner. Release to re-dice this track.">
+        <label class="field theme-slider" data-tip="How many notes of the pattern play. 80 ≈ eight in ten. Release to re-dice this track.">
           <span>Density <output class="midi-density-out">50</output></span>
           <input type="range" class="midi-density" min="0" max="100" value="50" />
           <span class="theme-slider-ends"><i>sparse</i><i>dense</i></span>
         </label>
-        <label class="field theme-slider" data-tip="How much bars 2–4 change. Release to re-dice this track.">
+        <label class="field theme-slider" data-tip="How much pitches change from bar to bar. Hits stay put. Release to re-dice this track.">
           <span>Variance <output class="midi-variance-out">50</output></span>
           <input type="range" class="midi-variance" min="0" max="100" value="50" />
           <span class="theme-slider-ends"><i>repeat</i><i>vary</i></span>
@@ -4093,7 +4291,7 @@ function bindMidiEditorRoot(role, root) {
       holdTimer = setTimeout(() => {
         holdTimer = null;
         held = true;
-        if (state.progression && !isThemeLocked()) {
+        if (bar < getLoopBars() && state.progression && !isThemeLocked()) {
           openThemeChordPicker(bar, btn);
         }
       }, 400);
@@ -4114,6 +4312,7 @@ function bindMidiEditorRoot(role, root) {
         held = false;
         return;
       }
+      if (bar >= getLoopBars()) return;
       const ed = midiEditors[role];
       if (!ed) return;
       ed.barIndex = bar;
@@ -4156,6 +4355,10 @@ function bindMidiShapeSliders(role, root) {
       sync();
       if (!state.progression) return;
       const hr = harmonyRole(baseType(role));
+      if (isTrackLocked(role)) {
+        setStatus(`${role} is locked — unlock to change MIDI`);
+        return;
+      }
       const run = hr === "bass" ? diceBass : hr === "lead" ? diceLead : null;
       if (!run) return;
       run({ trackId: role }).catch((e) =>
@@ -4462,10 +4665,13 @@ function renderMidiEditor(role) {
   const midiRole = midiRoleForSlot(role);
   const hr = harmonyRole(baseType(role));
   const is64 = Array.isArray(draft.grid) && draft.grid.length === 64;
-  if (is64 && (ed.barIndex == null || ed.barIndex < 0 || ed.barIndex > 3)) ed.barIndex = 0;
+  const loopBars = getLoopBars();
+  if (is64 && (ed.barIndex == null || ed.barIndex < 0 || ed.barIndex >= loopBars)) {
+    ed.barIndex = 0;
+  }
   const barIndex = is64 ? ed.barIndex || 0 : 0;
   const offset = is64 ? barIndex * 16 : 0;
-  const barsLabel = is64 || draft.bars === 4 ? "4 bars" : "1 bar";
+  const barsLabel = loopBars === 1 ? "1 bar" : `${loopBars} bars`;
 
   const title = $(".midi-title", root);
   const sub = $(".midi-subtitle", root);
@@ -4525,13 +4731,14 @@ function renderMidiEditor(role) {
 
   const pager = $(".midi-bar-pager", root);
   if (pager) {
-    pager.hidden = !is64;
+    pager.hidden = !is64 || loopBars < 2;
     pager.querySelectorAll(".midi-bar-btn").forEach((btn) => {
       const b = Number(btn.dataset.bar) || 0;
       const ch = state.progression?.chords?.[b];
       const roman = ch?.roman || "—";
+      btn.hidden = b >= loopBars;
       btn.textContent = `Bar ${b + 1}: ${roman}`;
-      btn.classList.toggle("on", is64 && b === barIndex);
+      btn.classList.toggle("on", is64 && b === barIndex && b < loopBars);
       btn.classList.toggle("muted", ch?.enabled === false);
     });
   }
@@ -4886,17 +5093,35 @@ function initMidiEditorUi() {
 function syncLockUi(role) {
   const slot = ensureSlotEl(role);
   if (!slot) return;
-  const locked = Boolean(state.slots[role]?.locked);
-  const lockBtn = $(".icon-btn.lock", slot);
+  const locked = isTrackLocked(role);
+  const presetLocked = Boolean(state.slots[role]?.presetLocked);
+  const lockBtn = $(".slot-actions .icon-btn.lock", slot);
   slot.classList.toggle("locked", locked);
-  if (!lockBtn) return;
-  lockBtn.classList.toggle("on", locked);
-  lockBtn.setAttribute("aria-pressed", String(locked));
-  lockBtn.textContent = locked ? "🔒" : "🔓";
-  lockBtn.setAttribute("aria-label", locked ? "Unlock" : "Lock");
-  lockBtn.dataset.tip = locked
-    ? "Unlock — allow Reroll to change this track"
-    : "Lock — keep this sound on Reroll";
+  slot.classList.toggle("preset-locked", presetLocked && !locked);
+  if (lockBtn) {
+    lockBtn.classList.toggle("on", locked);
+    lockBtn.setAttribute("aria-pressed", String(locked));
+    lockBtn.textContent = locked ? "🔒" : "🔓";
+    lockBtn.setAttribute("aria-label", locked ? "Unlock" : "Lock");
+    lockBtn.dataset.tip = locked
+      ? "Unlock — allow Reroll to change preset and MIDI"
+      : "Lock — keep preset and MIDI on Reroll";
+  }
+  const presetBtn = $(".icon-btn.preset-lock", slot);
+  if (presetBtn) {
+    const presetOn = locked || presetLocked;
+    presetBtn.classList.toggle("on", presetOn);
+    presetBtn.setAttribute("aria-pressed", String(presetOn));
+    presetBtn.textContent = presetOn ? "🔒" : "🔓";
+    presetBtn.setAttribute("aria-label", presetOn ? "Unlock preset" : "Lock preset");
+    if (locked) {
+      presetBtn.dataset.tip = "Track locked — preset and MIDI stay";
+    } else if (presetLocked) {
+      presetBtn.dataset.tip = "Unlock preset — Reroll may change the sound";
+    } else {
+      presetBtn.dataset.tip = "Lock preset — Reroll may still change MIDI";
+    }
+  }
 }
 
 function toggleLock(role, _btn) {
@@ -4908,7 +5133,25 @@ function toggleLock(role, _btn) {
   const locked = !cur.locked;
   state.slots[role] = { ...cur, locked };
   syncLockUi(role);
-  setStatus(locked ? `Locked ${role}` : `Unlocked ${role}`);
+  setStatus(locked ? `Locked ${role} · preset and MIDI` : `Unlocked ${role}`);
+}
+
+function togglePresetLock(role) {
+  const cur = state.slots[role];
+  if (!cur) return;
+  if (cur.locked) {
+    setStatus("Track locked — unlock the track lock to change preset lock");
+    return;
+  }
+  pushUndo(cur.presetLocked ? `Unlock preset · ${role}` : `Lock preset · ${role}`);
+  const presetLocked = !cur.presetLocked;
+  state.slots[role] = { ...cur, presetLocked };
+  syncLockUi(role);
+  setStatus(
+    presetLocked
+      ? `Preset locked · ${role} — MIDI can still change`
+      : `Preset unlocked · ${role}`
+  );
 }
 
 function serumTypeOptionsHtml(selected) {
@@ -4958,14 +5201,21 @@ function buildSlotElement(id, type) {
   art.innerHTML = `
     ${roleHtml}
     <div class="slot-body"${serum ? ' data-tip="Double-click to open / close MIDI"' : ""}>
-      <div class="slot-name">${serum ? `Serum · ${type}` : "— empty —"}</div>
+      <div class="slot-name-row">
+        <div class="slot-name">${serum ? `Serum · ${type}` : "— empty —"}</div>
+        ${
+          serum
+            ? `<button type="button" class="icon-btn preset-lock" data-tip="Lock preset — Reroll may still change MIDI" aria-pressed="false" aria-label="Lock preset">🔓</button>`
+            : ""
+        }
+      </div>
       <div class="slot-meta">${serum ? "preset · MIDI will follow key" : "optional · pick with Reroll"}</div>
     </div>
     ${toolsHtml}
     <div class="slot-actions">
       <button type="button" class="icon-btn mute" data-tip="Mute / unmute" aria-pressed="false" aria-label="Mute">🔊</button>
       <button type="button" class="icon-btn solo" data-tip="Solo this track" aria-pressed="false" aria-label="Solo">S</button>
-      <button type="button" class="icon-btn lock" data-tip="Lock — keep on Reroll" aria-pressed="false" aria-label="Lock">🔓</button>
+      <button type="button" class="icon-btn lock" data-tip="Lock — keep preset and MIDI on Reroll" aria-pressed="false" aria-label="Lock">🔓</button>
       <button type="button" class="icon-btn delete" data-tip="Remove track from stack" aria-label="Delete track">🗑️</button>
       <button type="button" class="icon-btn dice" data-tip="Reroll this track" aria-label="Reroll">🎲</button>
     </div>
@@ -4976,7 +5226,8 @@ function buildSlotElement(id, type) {
 function bindSlotElement(art) {
   const role = art.dataset.role;
   const type = art.dataset.type || baseType(role);
-  const lock = $(".icon-btn.lock", art);
+  const lock = $(".slot-actions .icon-btn.lock", art);
+  const presetLock = $(".icon-btn.preset-lock", art);
   const dice = $(".icon-btn.dice", art);
   const mute = $(".icon-btn.mute", art);
   const solo = $(".icon-btn.solo", art);
@@ -4985,6 +5236,11 @@ function bindSlotElement(art) {
   const typeSel = $(".slot-role-select", art);
 
   lock?.addEventListener("click", () => toggleLock(role, lock));
+  presetLock?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (e.detail > 1) return;
+    togglePresetLock(role);
+  });
   mute?.addEventListener("click", () => toggleMute(role));
   solo?.addEventListener("click", () => toggleSolo(role));
   dice?.addEventListener("click", () => {
@@ -4998,7 +5254,7 @@ function bindSlotElement(art) {
   });
   if (serumM) {
     art.addEventListener("dblclick", (e) => {
-      if (e.target.closest("select, input, textarea, a, .slot-actions, .slot-role-wrap")) {
+      if (e.target.closest("select, input, textarea, a, .slot-actions, .slot-role-wrap, .preset-lock")) {
         return;
       }
       // M already toggled on the first click.
@@ -5026,6 +5282,7 @@ function bindSlotElement(art) {
       meta: $(".slot-meta", art)?.textContent || "",
       path: null,
       locked: false,
+      presetLocked: false,
       muted: false,
       solo: false,
       empty: type === "fx",
@@ -5063,6 +5320,7 @@ function addTrack(type, { silent = false } = {}) {
       : "pick with Reroll / dice",
     path: null,
     locked: false,
+    presetLocked: false,
     muted: false,
     solo: false,
     empty: true,
@@ -5270,6 +5528,7 @@ function cloneSlotSnapshot(s) {
     ext: s.ext || null,
     empty: Boolean(s.empty),
     locked: Boolean(s.locked),
+    presetLocked: Boolean(s.presetLocked),
     muted: Boolean(s.muted),
     solo: Boolean(s.solo),
     serumType: s.serumType || null,
@@ -5289,6 +5548,7 @@ function captureDocSnapshot() {
     trackSeq,
     slots,
     bpm: getBpm(),
+    bars: getLoopBars(),
     key: $("#key")?.value || "F minor",
     style: ($("#style")?.value || "").trim(),
     progression: cloneProgression(state.progression),
@@ -5341,6 +5601,7 @@ function restoreDocSnapshot(snap) {
     const keyEl = $("#key");
     const styleEl = $("#style");
     if (bpmEl && snap.bpm != null) bpmEl.value = String(snap.bpm);
+    if (snap.bars != null) applyLoopBars(snapLoopBars(snap.bars, 4));
     if (keyEl && snap.key) keyEl.value = snap.key;
     if (styleEl && snap.style != null) setStyleValue(snap.style);
     rememberSessionKey(keyEl?.value || snap.key);
@@ -5363,6 +5624,7 @@ function restoreDocSnapshot(snap) {
         ext: raw.ext || null,
         empty: raw.empty != null ? Boolean(raw.empty) : !raw.path,
         locked: Boolean(raw.locked),
+        presetLocked: Boolean(raw.presetLocked || raw.preset_locked),
         muted: Boolean(raw.muted),
         solo: Boolean(raw.solo),
         serumType: raw.serumType || (isSerumType(type) ? type : "any"),
@@ -5464,6 +5726,7 @@ function serializeLoop(name) {
       ext: s.ext || null,
       empty: Boolean(s.empty),
       locked: Boolean(s.locked),
+      presetLocked: Boolean(s.presetLocked),
       muted: Boolean(s.muted),
       solo: Boolean(s.solo),
       serumType: s.serumType || (isSerumTrack(id) ? baseType(id) : "any"),
@@ -5475,6 +5738,7 @@ function serializeLoop(name) {
   const payload = {
     name: String(name || "").trim(),
     bpm: getBpm(),
+    bars: getLoopBars(),
     key: $("#key")?.value || "F minor",
     style: ($("#style")?.value || "").trim(),
     options: {
@@ -5483,10 +5747,10 @@ function serializeLoop(name) {
       serum1: state.options.serum1 !== false,
       serum2: state.options.serum2 !== false,
       instruments: { ...(state.options.instruments || defaultInstrumentsMap()) },
+      loopBars: getLoopBars(),
     },
     track_order: [...activeTrackIds()],
     slots,
-    id: state.currentLoopId || null,
   };
   const prog = cloneProgression(state.progression);
   if (prog) payload.progression = prog;
@@ -5557,6 +5821,8 @@ function applyLoadedLoop(doc) {
   const keyEl = $("#key");
   const styleEl = $("#style");
   if (bpmEl && doc.bpm != null) bpmEl.value = String(doc.bpm);
+  const loadedBars = doc.bars ?? doc.options?.loopBars;
+  applyLoopBars(loadedBars == null ? 4 : snapLoopBars(loadedBars, 4));
   if (keyEl && doc.key) keyEl.value = doc.key;
   if (styleEl && doc.style != null) setStyleValue(doc.style);
   rememberSessionKey(keyEl?.value || doc.key);
@@ -5615,6 +5881,7 @@ function applyLoadedLoop(doc) {
       ext: raw.ext || null,
       empty: raw.empty != null ? Boolean(raw.empty) : !raw.path,
       locked: Boolean(raw.locked),
+      presetLocked: Boolean(raw.presetLocked || raw.preset_locked),
       muted: Boolean(raw.muted),
       solo: Boolean(raw.solo),
       serumType: raw.serumType || (isSerumType(type) ? type : "any"),
@@ -5758,6 +6025,11 @@ function initUiChrome() {
     bpmInput.addEventListener("input", onBpmInput);
     bpmInput.addEventListener("change", onBpmInput);
   }
+  const barsInput = $("#bars");
+  if (barsInput) {
+    barsInput.addEventListener("input", onBarsInput);
+    barsInput.addEventListener("change", onBarsInput);
+  }
 
   ensureInstrumentsState();
   renderInstrumentCheckboxes();
@@ -5827,6 +6099,7 @@ function initUiChrome() {
 
   // Session fields also persist as user settings
   $("#bpm")?.addEventListener("change", () => scheduleSaveUserSettings());
+  $("#bars")?.addEventListener("change", () => scheduleSaveUserSettings());
   $("#key")?.addEventListener("change", () => scheduleSaveUserSettings({ immediate: true }));
   $("#style")?.addEventListener("change", () => scheduleSaveUserSettings({ immediate: true }));
 
@@ -6286,7 +6559,7 @@ async function doExportLoop() {
           bpm,
           key,
           style,
-          bars: typeof LOOP_BARS === "number" ? LOOP_BARS : 4,
+          bars: getLoopBars(),
           tracks,
           open_folder: false,
           write_als: writeAls,
@@ -6552,6 +6825,8 @@ async function init() {
     initDefaultTracks();
     rememberSessionKey();
     await loadLibrary();
+    applyLoopBars(getLoopBars());
+    renderThemePanel();
     // Initial fill only — don't autoplay (needs user gesture for AudioContext)
     await doGenerate({ autoPlay: false });
   } catch (e) {

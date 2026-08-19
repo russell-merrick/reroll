@@ -113,6 +113,20 @@ RECIPES: dict[str, dict[str, Any]] = {
         "lanes": ["techno"],
         "pad_seventh": False,
     },
+    "i_i_sus4_sus4": {
+        "id": "i_i_sus4_sus4",
+        "label": "i–i–sus4–sus4",
+        "romans": ["i", "i", "sus4", "sus4"],
+        "lanes": ["peak", "techno"],
+        "pad_seventh": False,
+    },
+    "i_sus4_i_sus4": {
+        "id": "i_sus4_i_sus4",
+        "label": "i–sus4–i–sus4",
+        "romans": ["i", "sus4", "i", "sus4"],
+        "lanes": ["peak", "techno"],
+        "pad_seventh": False,
+    },
 }
 
 _ROMAN_DEGREE = {
@@ -128,7 +142,9 @@ _QUALITY_INTERVALS = {
     "min": [0, 3, 7],
     "maj": [0, 4, 7],
     "dim": [0, 3, 6],
+    "sus4": [0, 5, 7],
 }
+_SUS4_RE = re.compile(r"^(?:i[\s._-]*)?sus4$", re.I)
 _NO_STYLE = frozenset(
     {"", "none", "no preference", "nopreference", "any", "all", "random", "n/a", "na"}
 )
@@ -255,8 +271,12 @@ _MOTIF_RHYTHMS_DENSE: tuple[tuple[int, ...], ...] = (
     (0, 4, 5, 8, 12, 13, 14),
     (0, 2, 4, 8, 10, 12),
 )
+_HOOK_SEQUENCE: tuple[int, ...] = (0, 4, 8, 12)
+_PICKUP_SEQUENCE: tuple[int, ...] = (0, 8, 12, 13, 14, 15)
 _TONIC_RE = re.compile(r"([A-G])(#|b)?", re.I)
 THEME_ROMANS: tuple[str, ...] = ("i", "ii", "III", "iv", "v", "V", "VI", "VII")
+THEME_ROMANS_PEAK: tuple[str, ...] = ("i", "VI", "VII", "sus4")
+_PEAK_ROMANS = frozenset(THEME_ROMANS_PEAK)
 
 
 def harmony_role(track_type: str | None) -> str | None:
@@ -329,8 +349,23 @@ def _as_recipe(recipe: str | dict[str, Any]) -> dict[str, Any]:
     raise KeyError(f"unknown recipe: {recipe}")
 
 
+def is_peak_time_style(style: str) -> bool:
+    blob = (style or "").strip().lower().replace("_", " ").replace("-", " ")
+    if blob in _NO_STYLE:
+        return False
+    return "peak" in blob
+
+
+def theme_romans_for_style(style: str = "") -> tuple[str, ...]:
+    if is_peak_time_style(style):
+        return THEME_ROMANS_PEAK
+    return THEME_ROMANS
+
+
 def _parse_roman(roman: str) -> tuple[int, str]:
     raw = (roman or "i").strip()
+    if _SUS4_RE.match(raw.replace("(", "").replace(")", "")):
+        return 0, "sus4"
     if "°" in raw:
         core = raw.replace("°", "")
         return _ROMAN_DEGREE[core.lower()], "dim"
@@ -480,7 +515,7 @@ def apply_edited_harmony(
         if role == "bass" and tid in midi_out and prev:
             midi_out[tid]["patternId"] = prev.get("patternId") or midi_out[tid]["patternId"]
         if role == "lead" and prev and prev.get("source") == "progression":
-            ret = rewrite_bass_grid(prog, prev, octave=_track_octave(track, 4))
+            ret = rewrite_lead_grid(prog, prev, octave=_track_octave(track, 4))
             ret["patternId"] = prev.get("patternId") or "prog-lead"
             ret["octave"] = _track_octave(track, 4)
             midi_out[tid] = ret
@@ -529,7 +564,10 @@ def _style_recipe_weights(style: str) -> dict[str, int]:
     melodic = any(t in blob for t in ("melodic", "afterlife"))
     prog = any(t in blob for t in ("prog", "progressive", "anjunadeep"))
     trance = any(t in blob for t in ("trance", "uplifting", "anjunabeats", "3.0"))
-    techno = any(t in blob for t in ("techno", "peak", "hard")) and not melodic
+    peak = is_peak_time_style(blob)
+    techno = (
+        any(t in blob for t in ("techno", "hard")) and not melodic and not peak
+    )
     house = "house" in blob and not prog
 
     def bump(rid: str, factor: int) -> None:
@@ -551,6 +589,21 @@ def _style_recipe_weights(style: str) -> dict[str, int]:
         bump("i_VI_iv_V", 2)
         bump("i_III_VI_VII", 2)
         bump("i_i_VI_VI", 2)
+    if peak:
+        for rid in list(weights):
+            romans = [str(r) for r in (RECIPES[rid].get("romans") or [])]
+            if (
+                not set(romans) <= _PEAK_ROMANS
+                or not is_two_cell_recipe(rid)
+                or recipe_unique_count(rid) != 2
+            ):
+                weights[rid] = 0
+        bump("i_i_VI_VI", 3)
+        bump("i_VI_i_VI", 3)
+        bump("i_i_VII_VII", 3)
+        bump("i_VII_i_VII", 3)
+        bump("i_i_sus4_sus4", 3)
+        bump("i_sus4_i_sus4", 3)
     if techno:
         for rid in list(weights):
             romans = [str(r) for r in (RECIPES[rid].get("romans") or [])]
@@ -642,23 +695,56 @@ def _midi_state(
     }
 
 
+def _is_sus4_chord(chord: dict[str, Any] | None) -> bool:
+    if not isinstance(chord, dict):
+        return False
+    if str(chord.get("quality") or "").lower() == "sus4":
+        return True
+    raw = str(chord.get("roman") or "").strip().lower().replace(" ", "")
+    return raw in ("sus4", "isus4")
+
+
+def _color_degree(chord: dict[str, Any], key: str) -> int:
+    """Characteristic non-root tone: 4th on sus4, otherwise the triad's 3rd."""
+    if _is_sus4_chord(chord):
+        return 3
+    pcs = chord.get("pcs") or []
+    if len(pcs) >= 2:
+        deg, _ = pc_to_degree_alter(int(pcs[1]), key)
+        return int(deg)
+    return (int(chord.get("root_degree") or 0) + 2) % 7
+
+
+def _degree_for_hit(chord: dict[str, Any], key: str, step: int, *, first: bool) -> int:
+    root = int(chord.get("root_degree") or 0)
+    if _is_sus4_chord(chord) and not first:
+        return _color_degree(chord, key)
+    return root
+
+
 def rewrite_bass_grid(
     progression: dict[str, Any],
     grid: list | dict | None = None,
     *,
     octave: int | None = None,
 ) -> dict[str, Any]:
-    """64-step roots-only bass. Rhythm from `grid` (bar 0 if already 64)."""
+    """64-step bass. Rhythm from `grid` (bar 0 if already 64).
+
+    sus4 bars keep the root on the first hit and move later hits to the 4th
+    so the quality is audible on a monophonic bass.
+    """
     chords = effective_chords(progression) or progression["chords"]
     key = progression.get("key") or "C minor"
     octv = 2 if octave is None else int(octave)
     rhythm = _rhythm_bar(grid)
     out = _empty_grid()
     for bar, chord in enumerate(chords[:BARS]):
-        deg = int(chord["root_degree"])
+        first = True
         for s, src in enumerate(rhythm):
             if not src:
                 continue
+            deg = _degree_for_hit(chord, key, s, first=first)
+            first = False
             out[bar * STEPS_PER_BAR + s] = {
                 "degree": deg,
                 "length": src["length"],
@@ -667,24 +753,77 @@ def rewrite_bass_grid(
     return _midi_state(pattern_id="prog-roots", octave=octv, key=key, grid=out)
 
 
-def _gate_pool(kind: str, density: float) -> tuple[tuple[int, ...], ...]:
+def rewrite_lead_grid(
+    progression: dict[str, Any],
+    midi: dict[str, Any] | list | None = None,
+    *,
+    octave: int | None = None,
+) -> dict[str, Any]:
+    """Keep lead rhythm; retarget degrees to the bar's chord.
+
+    sus4: first hit stays the root when there are more notes, otherwise the
+    4th. Later downbeats and leftover minor-3rds become the 4th.
+    """
+    src = midi if isinstance(midi, dict) else {}
+    raw = src.get("grid") if src else midi
+    key = progression.get("key") or "C minor"
+    octv = 4 if octave is None else int(octave)
+    chords = effective_chords(progression) or list(progression.get("chords") or [])
+    if isinstance(raw, list) and len(raw) == LOOP_STEPS:
+        cells = list(raw)
+    elif isinstance(raw, list) and len(raw) == STEPS_PER_BAR:
+        cells = list(raw) * BARS
+    else:
+        rhythm = _rhythm_bar(raw)
+        cells = []
+        for _ in range(BARS):
+            cells.extend(rhythm)
+    out = _empty_grid()
+    for bar in range(BARS):
+        chord = chords[bar] if bar < len(chords) else None
+        if not isinstance(chord, dict):
+            continue
+        root = int(chord.get("root_degree") or 0)
+        color = _color_degree(chord, key)
+        sus = _is_sus4_chord(chord)
+        base = bar * STEPS_PER_BAR
+        hit_idx = [s for s in range(STEPS_PER_BAR) if cells[base + s]]
+        only = len(hit_idx) <= 1
+        first = True
+        for s in range(STEPS_PER_BAR):
+            cell = cells[base + s]
+            if not cell or not isinstance(cell, dict):
+                continue
+            deg = int(cell.get("degree", 0))
+            if sus:
+                if first and not only:
+                    deg = root
+                elif s % 4 == 0 or first or deg == 2:
+                    deg = color
+            first = False
+            nxt: dict[str, Any] = {
+                "degree": deg,
+                "length": max(1, int(cell.get("length") or 1)),
+                "vel": int(cell.get("vel") or 100),
+            }
+            if cell.get("oct") is not None:
+                nxt["oct"] = cell["oct"]
+            out[base + s] = nxt
+    return _midi_state(
+        pattern_id=str(src.get("patternId") or "prog-lead"),
+        octave=octv,
+        key=key,
+        grid=out,
+    )
+
+
+def _full_gate_pool(kind: str) -> tuple[tuple[int, ...], ...]:
+    """Unthinned sequences. Density keeps a fraction of the chosen one."""
     if kind == "bouncer":
-        if density <= 0.35:
-            return _BOUNCER_GATES_SPARSE
-        if density >= 0.65:
-            return _BOUNCER_GATES_DENSE
-        return _BOUNCER_GATES
+        return _BOUNCER_GATES + _BOUNCER_GATES_DENSE
     if kind == "groove":
-        if density <= 0.35:
-            return _GROOVE_GATES_SPARSE
-        if density >= 0.65:
-            return _GROOVE_GATES_DENSE
-        return _GROOVE_GATES
-    if density <= 0.35:
-        return _RUNNER_GATES_SPARSE
-    if density >= 0.65:
-        return _RUNNER_GATES_DENSE
-    return _RUNNER_GATES
+        return _GROOVE_GATES + _GROOVE_GATES_DENSE
+    return _RUNNER_GATES + _RUNNER_GATES_DENSE
 
 
 def _pick_bass_kind(rng: random.Random, density: float) -> str:
@@ -701,13 +840,23 @@ def _pick_bass_kind(rng: random.Random, density: float) -> str:
 def _pick_runner_gates(
     rng: random.Random, density: float, kind: str = "runner"
 ) -> list[int]:
-    pool = _gate_pool(kind, density)
-    hits = list(rng.choice(pool))
-    return sorted({int(s) for s in hits if 0 <= int(s) < STEPS_PER_BAR})
+    sequence = list(rng.choice(_full_gate_pool(kind)))
+    return _apply_density(sequence, density, rng)
 
 
 def _runner_root_midi(chord: dict[str, Any], key: str, octave: int) -> int:
     return degree_to_midi(key, int(chord["root_degree"]), int(octave))
+
+
+def _fit_pitch(midi_n: int, lo: int, hi: int, fallback: int) -> int:
+    n = int(midi_n)
+    while n > hi:
+        n -= 12
+    while n < lo:
+        n += 12
+    if lo <= n <= hi:
+        return n
+    return max(lo, min(hi, int(fallback)))
 
 
 def _runner_detail_midi(
@@ -722,33 +871,31 @@ def _runner_detail_midi(
     rng: random.Random,
     variance: float,
     avoid_pcs: set[int] | None,
+    melodic: bool = False,
 ) -> int:
-    """Mostly the root; rare octave / 5th / neighbor. That's the acid detail."""
+    """Mostly the root; variance adds 5th / neighbor / octave (lead moves more)."""
     fifth = degree_to_midi(key, (int(chord["root_degree"]) + 4) % 7, int(octave))
     second = degree_to_midi(key, (int(chord["root_degree"]) + 1) % 7, int(octave))
     seventh = degree_to_midi(key, (int(chord["root_degree"]) + 6) % 7, int(octave))
+    third = degree_to_midi(key, _color_degree(chord, key), int(octave))
     oct_up = root_midi + 12 if root_midi + 12 <= hi else root_midi
     roll = rng.random()
-    spice = 0.06 + 0.16 * variance
-    if roll < spice * 0.45:
-        cand = oct_up
-    elif step % 4 != 0 and roll < spice * 0.75:
-        cand = rng.choice((second, seventh))
+    spice = (0.12 + 0.62 * variance) if melodic else (0.05 + 0.38 * variance)
+    if roll < spice * 0.35:
+        cand = oct_up if melodic else (oct_up if roll < spice * 0.2 else fifth)
+    elif step % 4 != 0 and roll < spice * 0.7:
+        cand = rng.choice((second, seventh, third) if melodic else (second, seventh))
     elif roll < spice:
-        cand = fifth if fifth <= hi else root_midi
+        cand = rng.choice((fifth, third)) if melodic else (fifth if fifth <= hi else root_midi)
     else:
         cand = root_midi
     blocked = avoid_pcs or set()
     if blocked and cand % 12 in blocked:
-        for alt in (fifth, second, seventh, oct_up, root_midi):
+        for alt in (fifth, second, seventh, third, oct_up, root_midi):
             if alt % 12 not in blocked and lo <= alt <= hi:
                 cand = alt
                 break
-    if cand > hi:
-        cand = root_midi
-    if cand < lo:
-        cand = root_midi
-    return cand
+    return _fit_pitch(cand, lo, hi, root_midi)
 
 
 def _runner_vel(step: int, rng: random.Random) -> int:
@@ -791,7 +938,11 @@ def write_runner_grid(
     pattern_id: str | None = None,
     kind: str = "runner",
 ) -> dict[str, Any]:
-    """Gated techno bass: runner (16ths), bouncer (offbeats), or groove."""
+    """Gated techno bass: runner (16ths), bouncer (offbeats), or groove.
+
+    Density picks the hit pattern (keep-rate of one sequence). Variance only
+    changes pitches — same gates every bar.
+    """
     key = progression.get("key") or "C minor"
     octv = int(octave)
     density = _clamp01(density)
@@ -803,34 +954,50 @@ def write_runner_grid(
     lo = degree_to_midi(key, 0, octv)
     hi = lo + 14
     avoid_pcs = _avoid_pcs(avoid, key)
-    gates = _pick_runner_gates(rng, density, kind)
-    if not gates:
-        gates = [0, 3, 4, 8, 11, 12]
+    hits = _pick_runner_gates(rng, density, kind)
+    if not hits:
+        hits = [0, 3, 4, 8, 11, 12]
+    lengths = [_runner_length(s, hits, i, length, kind) for i, s in enumerate(hits)]
+    melodic = str(pattern_id or "").startswith("prog-lead")
+    scale = _scale_midis(key, lo, hi)
     out = _empty_grid()
+    offsets: list[int] = []
     for bar, chord in enumerate(chords):
-        hits = list(gates)
-        if variance > 0.5 and bar > 0:
-            hits = _vary_hits(hits, rng, variance)
-            if not hits:
-                hits = list(gates)
         root = _runner_root_midi(chord, key, octv)
+        color_m = degree_to_midi(key, _color_degree(chord, key), octv)
+        anchor = root
+        chord_midis, _, _ = _chord_pools(chord, lo, hi)
         for i, s in enumerate(hits):
-            pitch = _runner_detail_midi(
-                root,
-                key,
-                chord,
-                step=s,
-                lo=lo,
-                hi=hi,
-                octave=octv,
-                rng=rng,
-                variance=variance,
-                avoid_pcs=avoid_pcs if bar == 0 and i == 0 else None,
-            )
+            if _is_sus4_chord(chord) and i > 0:
+                anchor = color_m
+            else:
+                anchor = root
+            replay = bar > 0 and offsets and (variance <= 0.0 or rng.random() >= variance)
+            if replay:
+                pitch = _fit_pitch(root + offsets[i], lo, hi, anchor)
+            else:
+                pitch = _runner_detail_midi(
+                    anchor,
+                    key,
+                    chord,
+                    step=s,
+                    lo=lo,
+                    hi=hi,
+                    octave=octv,
+                    rng=rng,
+                    variance=variance,
+                    avoid_pcs=avoid_pcs if bar == 0 and i == 0 else None,
+                    melodic=melodic,
+                )
+            pool = chord_midis if s % 4 == 0 else scale
+            if pool:
+                pitch = min(pool, key=lambda m: (abs(m - pitch), m))
+            if bar == 0:
+                offsets.append(pitch - root)
             out[bar * STEPS_PER_BAR + s] = _cell_from_midi(
                 pitch,
                 key,
-                _runner_length(s, hits, i, length, kind),
+                lengths[i],
                 _runner_vel(s, rng),
                 octave=octv,
             )
@@ -865,7 +1032,7 @@ def dice_bass_grid(
 
 def _close_midis(chord: dict[str, Any], octave: int, seventh: bool) -> list[int]:
     intervals = list(chord["intervals"])
-    if seventh and 10 not in intervals:
+    if seventh and 10 not in intervals and chord.get("quality") != "sus4":
         intervals = intervals + [10]
     root_pc = int(chord["root_pc"])
     base = (int(octave) + 1) * 12 + root_pc
@@ -1191,29 +1358,21 @@ def _hit_lengths(
     return lengths
 
 
-def _phrase_weights(density: float, variance: float) -> list[float]:
+def _phrase_weights(density: float) -> list[float]:
     weights = {p: float(_PHRASE_WEIGHTS[p]) for p in _PHRASE_TYPES}
     d = (density - 0.5) * 2.0
     if d < 0:
-        weights["runner"] *= max(0.25, 1.0 + d * 0.6)
-        weights["hook_hold"] *= 1.0 - d * 2.0
-        weights["sparse_pickup"] *= 1.0 - d
-        weights["motif_echo"] *= max(0.15, 1.0 + d * 0.8)
-        weights["call_answer"] *= max(0.15, 1.0 + d * 0.8)
+        weights["runner"] *= max(0.2, 1.0 + d * 0.85)
+        weights["hook_hold"] *= 1.0 - d * 2.2
+        weights["sparse_pickup"] *= 1.0 - d * 1.4
+        weights["motif_echo"] *= max(0.2, 1.0 + d * 0.5)
+        weights["call_answer"] *= max(0.2, 1.0 + d * 0.5)
     elif d > 0:
-        weights["runner"] *= 1.0 + d * 0.8
-        weights["hook_hold"] *= max(0.08, 1.0 - d * 1.1)
-        weights["sparse_pickup"] *= max(0.15, 1.0 - d * 0.5)
-        weights["motif_echo"] *= max(0.15, 1.0 - d * 0.3)
-        weights["call_answer"] *= max(0.15, 1.0 + d * 0.15)
-    v = (variance - 0.5) * 2.0
-    if v > 0:
-        weights["call_answer"] *= 1.0 + v * 0.9
-        weights["motif_echo"] *= max(0.35, 1.0 - v * 0.25)
-    elif v < 0:
-        weights["call_answer"] *= max(0.2, 1.0 + v * 0.7)
-        weights["motif_echo"] *= 1.0 - v * 0.35
-        weights["hook_hold"] *= 1.0 - v * 0.2
+        weights["runner"] *= 1.0 + d * 1.4
+        weights["hook_hold"] *= max(0.05, 1.0 - d * 1.3)
+        weights["sparse_pickup"] *= max(0.08, 1.0 - d * 0.8)
+        weights["motif_echo"] *= 1.0 + d * 0.4
+        weights["call_answer"] *= 1.0 + d * 0.25
     return [max(0.01, weights[p]) for p in _PHRASE_TYPES]
 
 
@@ -1223,10 +1382,10 @@ def _pick_phrase(
     variance: float = 0.5,
 ) -> str:
     ids = list(_PHRASE_TYPES)
-    if _near_mid(density) and _near_mid(variance):
+    if _near_mid(density):
         weights = [_PHRASE_WEIGHTS[p] for p in ids]
     else:
-        weights = _phrase_weights(density, variance)
+        weights = _phrase_weights(density)
     return rng.choices(ids, weights=weights, k=1)[0]
 
 
@@ -1235,79 +1394,58 @@ def _sixteenth_count(hits: tuple[int, ...] | list[int]) -> int:
 
 
 def _pick_motif(rng: random.Random, density: float) -> list[int]:
-    if density <= 0.35:
-        pool = _MOTIF_RHYTHMS_SPARSE
-    elif density >= 0.65:
-        pool = _MOTIF_RHYTHMS_DENSE
-    else:
-        pool = _MOTIF_RHYTHMS
-    if density <= 0.35 or _near_mid(density):
-        hits = list(rng.choice(pool))
-    else:
-        weights = []
-        for motif in pool:
-            n16 = _sixteenth_count(motif)
-            n = max(1, len(motif))
-            hit_fit = 1.0 - abs((n / 12.0) - density)
-            six_fit = (n16 / n) * (0.3 + 1.4 * density)
-            weights.append(max(0.08, 0.25 + hit_fit + six_fit))
-        hits = list(rng.choices(pool, weights=weights, k=1)[0])
+    """Full sequence. Caller applies density as the keep-rate."""
+    pool = _MOTIF_RHYTHMS + _MOTIF_RHYTHMS_DENSE + _MOTIF_RHYTHMS_SPARSE
+    weights = []
+    for motif in pool:
+        n16 = _sixteenth_count(motif)
+        n = max(1, len(motif))
+        hit_fit = 1.0 - abs((n / 12.0) - max(density, 0.25))
+        six_fit = (n16 / n) * (0.2 + 1.2 * density)
+        weights.append(max(0.08, 0.3 + hit_fit + six_fit))
+    hits = list(rng.choices(pool, weights=weights, k=1)[0])
     if 0 not in hits:
         hits = [0, *hits]
     return hits
 
 
-def _vary_hits(hits: list[int], rng: random.Random, variance: float) -> list[int]:
-    out = [int(s) for s in hits]
-    if not out:
-        return [0]
-    p = min(1.0, max(0.0, (variance - 0.5) * 2.0))
-    if rng.random() < p * 0.75 and len(out) > 2:
-        droppable = [i for i, s in enumerate(out) if s != 0]
-        if droppable:
-            del out[rng.choice(droppable)]
-    if rng.random() < p * 0.55:
-        movable = [i for i, s in enumerate(out) if s != 0]
-        if movable:
-            i = rng.choice(movable)
-            delta = rng.choice((-2, -1, 1, 2))
-            nxt = max(1, min(STEPS_PER_BAR - 1, out[i] + delta))
-            if nxt not in out:
-                out[i] = nxt
-    if rng.random() < p * 0.45:
-        extra = [s for s in range(1, STEPS_PER_BAR) if s not in out]
-        if extra:
-            out.append(rng.choice(extra))
-    out = sorted(set(out))
-    if 0 not in out:
-        out = [0, *out]
-    return out
-
-
-def _hook_hold_bar(
-    rng: random.Random,
+def _apply_density(
+    sequence: list[int] | tuple[int, ...],
     density: float,
-    length: float,
-) -> tuple[list[int], list[int]]:
-    if density < 0.35 or (density < 0.6 and rng.random() < 0.55):
-        hits = [0]
-    elif density > 0.75 and rng.random() < 0.55:
-        hits = [0, 4, 8, 12]
-    else:
-        hits = [0, 8]
-    lengths: list[int] = []
-    for i, s in enumerate(hits):
-        nxt = hits[i + 1] if i + 1 < len(hits) else STEPS_PER_BAR
-        room = max(1, nxt - s)
-        if length <= 0.25:
-            lengths.append(min(2 if length > 0.1 else 1, room))
-        elif length >= 0.75:
-            choices = [n for n in (8, 16) if n <= room] or [room]
-            lengths.append(max(choices) if length >= 0.9 else rng.choice(choices))
-        else:
-            choices = [n for n in (4, 8, 16) if n <= room] or [room]
-            lengths.append(rng.choice(choices))
-    return hits, lengths
+    rng: random.Random,
+) -> list[int]:
+    """Keep about `density` of the sequence, spread across the bar."""
+    hits = sorted({int(s) for s in sequence if 0 <= int(s) < STEPS_PER_BAR})
+    if not hits:
+        return [0]
+    d = _clamp01(density)
+    if d >= 0.999:
+        return hits
+    exact = len(hits) * d
+    target = int(exact)
+    if rng.random() < (exact - target):
+        target += 1
+    target = 1 if d <= 0.0 else max(1, min(len(hits), target))
+    if target >= len(hits):
+        return hits
+    preferred = 0 if 0 in hits else hits[0]
+    rest = [s for s in hits if s != preferred]
+    # Short sequences (hook/pickup): spread so holds have room.
+    # Longer runners: random subset so 16ths stay in proportion.
+    if len(hits) <= 4:
+        kept = [preferred]
+        while len(kept) < target and rest:
+            def gap(step: int) -> int:
+                return min(abs(step - k) for k in kept)
+
+            best = max(gap(s) for s in rest)
+            cands = [s for s in rest if gap(s) == best]
+            pick = rng.choice(cands)
+            kept.append(pick)
+            rest.remove(pick)
+        return sorted(kept)
+    rng.shuffle(rest)
+    return sorted([preferred, *rest[: target - 1]])
 
 
 def _pick_lead_pitch(
@@ -1325,6 +1463,8 @@ def _pick_lead_pitch(
     density: float = 0.5,
     variance: float = 0.5,
 ) -> int | None:
+    # Hits are already chosen; density must not drop notes here.
+    _ = density
     if s % 4 == 0:
         if bar_start or s == 0:
             pool = _bar_start_pool(
@@ -1338,26 +1478,29 @@ def _pick_lead_pitch(
                 rng=rng,
             )
         else:
-            pool = third_fifth or chord_midis
+            # High variance: more 3rd/5th vs repeating the same chord tone.
+            if variance >= 0.65 and third_fifth and rng.random() < variance:
+                pool = third_fifth
+            else:
+                pool = third_fifth or chord_midis
         return _pick_near(pool, prev, avoid_pcs=avoid_pcs, max_leap=max_leap, rng=rng)
     if s % 2 == 0:
         pitch = None
-        neighbor_p = 0.65 if _near_mid(variance) else (0.45 + 0.4 * variance)
+        neighbor_p = 0.22 + 0.62 * variance
         if rng.random() < neighbor_p and prev is not None:
             pitch = _pick_near(
                 _neighbors(prev, scale), prev, max_leap=max_leap, rng=rng
             )
         if pitch is None:
-            pitch = _pick_near(chord_midis, prev, max_leap=max_leap, rng=rng)
+            color = third_fifth if variance >= 0.5 and third_fifth else chord_midis
+            pitch = _pick_near(color, prev, max_leap=max_leap, rng=rng)
         return pitch
-    p16 = 0.15 + 0.4 * density
-    if rng.random() >= p16:
-        return None
     if prev is not None:
         pitch = _pick_near(_neighbors(prev, scale), prev, max_leap=max_leap, rng=rng)
         if pitch is not None:
             return pitch
-    return _pick_near(scale or chord_midis, prev, max_leap=max_leap, rng=rng)
+    pool = scale if variance >= 0.4 else (chord_midis or scale)
+    return _pick_near(pool or chord_midis, prev, max_leap=max_leap, rng=rng)
 
 
 def _snap_contour(
@@ -1431,7 +1574,12 @@ def dice_lead_grid(
     length: float = 0.5,
     phrase: str | None = None,
 ) -> dict[str, Any]:
-    """4-bar phrase. density=hits, variance=bar-to-bar change, length=note duration."""
+    """4-bar phrase.
+
+    density: which hits play (keep-rate of the phrase sequence).
+    variance: how much pitches change across bars — not the rhythm.
+    length: note duration.
+    """
     minor_key = progression.get("key") or tonic_minor_label(key)
     octv = 4 if octave is None else int(octave)
     lo = degree_to_midi(minor_key, 0, octv)
@@ -1443,7 +1591,7 @@ def dice_lead_grid(
     scale = _scale_midis(minor_key, lo, hi)
     avoid_pcs = _avoid_pcs(avoid, minor_key)
     chords = effective_chords(progression) or list(progression["chords"][:BARS])
-    phrase = phrase if phrase in _PHRASE_TYPES else _pick_phrase(rng, density, variance)
+    phrase = phrase if phrase in _PHRASE_TYPES else _pick_phrase(rng, density)
     if phrase == "runner":
         return write_runner_grid(
             progression,
@@ -1540,7 +1688,7 @@ def dice_lead_grid(
                 else:
                     pitch = first_pitch(bar, s)
             if pitch is None:
-                continue
+                pitch = lo
             place(bar, s, note_len, pitch)
             prev = pitch
             written.append(pitch)
@@ -1571,93 +1719,59 @@ def dice_lead_grid(
                     written.append(pitch)
         return written
 
-    default_shape = _near_mid(density) and _near_mid(variance) and _near_mid(length)
+    def replay_pitches() -> bool:
+        return variance <= 0.0 or (variance < 1.0 and rng.random() >= variance)
 
     if phrase == "hook_hold":
-        if default_shape:
-            for bar in range(BARS):
-                if rng.random() < 0.45:
-                    hits = [0]
-                    lengths = [rng.choice((8, 16))]
-                else:
-                    hits = [0, 8]
-                    lengths = [8, 8]
-                stamp_hits(bar, hits, lengths)
-        elif variance < 0.45:
-            hits, lengths = _hook_hold_bar(rng, density, length)
-            for bar in range(BARS):
-                stamp_hits(bar, hits, lengths)
-        else:
-            for bar in range(BARS):
-                hits, lengths = _hook_hold_bar(rng, density, length)
-                stamp_hits(bar, hits, lengths)
-    elif phrase == "sparse_pickup":
-        if default_shape:
-            for bar in range(BARS):
-                if bar == BARS - 1:
-                    stamp_hits(bar, [0], [rng.choice((8, 16))])
-                    continue
-                hits = [0, 12, 13, 14]
-                lengths = [4, 1, 1, 1]
-                stamp_hits(bar, hits, lengths)
-        else:
-            last_len = 16 if length >= 0.75 else (4 if length <= 0.3 else 8)
-            hold = 8 if length >= 0.5 else 4
-            for bar in range(BARS):
-                if bar == BARS - 1:
-                    stamp_hits(bar, [0], [last_len])
-                    continue
-                if density <= 0.35:
-                    stamp_hits(bar, [0], [hold])
-                    continue
-                if density >= 0.7:
-                    hits = [0, 8, 12, 13, 14, 15]
-                    stamp_hits(
-                        bar,
-                        hits,
-                        _hit_lengths(hits, rng, long_ok=length > 0.4, length=length),
-                    )
-                    continue
-                stamp_hits(bar, [0, 13, 14, 15], [hold, 1, 1, 1])
-    else:
-        hits = _pick_motif(rng, density)
+        hits = _apply_density(_HOOK_SEQUENCE, density, rng)
         lengths = _hit_lengths(hits, rng, long_ok=True, length=length)
-        stamp_hits(0, hits, lengths)
-        used: list[int] = []
-        used_len: list[int] = []
-        motif: list[int] = []
-        for s in range(STEPS_PER_BAR):
-            cell = out[s]
-            if not cell:
-                continue
-            used.append(s)
-            used_len.append(int(cell.get("length") or 1))
-            motif.append(
-                degree_to_midi(
-                    minor_key,
-                    int(cell.get("degree", 0)),
-                    int(cell.get("oct", octv)),
-                    alter=int(cell.get("alter", 0) or 0),
-                )
+        if length >= 0.45:
+            for i, s in enumerate(hits):
+                nxt = hits[i + 1] if i + 1 < len(hits) else STEPS_PER_BAR
+                room = max(1, nxt - s)
+                if room >= 8 and lengths[i] < 8:
+                    lengths[i] = 8
+                    break
+        motif = stamp_hits(0, hits, lengths)
+        for bar in range(1, BARS):
+            stamp_hits(
+                bar,
+                hits,
+                lengths,
+                motif_pitches=motif if replay_pitches() else None,
             )
+    elif phrase == "sparse_pickup":
+        hits = _apply_density(_PICKUP_SEQUENCE, density, rng)
+        lengths = _hit_lengths(hits, rng, long_ok=length > 0.4, length=length)
+        last_len = 16 if length >= 0.75 else (4 if length <= 0.3 else 8)
+        motif = stamp_hits(0, hits, lengths)
+        for bar in range(1, BARS):
+            if bar == BARS - 1:
+                stamp_hits(bar, [0], [last_len])
+                continue
+            stamp_hits(
+                bar,
+                hits,
+                lengths,
+                motif_pitches=motif if replay_pitches() else None,
+            )
+    else:
+        hits = _apply_density(_pick_motif(rng, density), density, rng)
+        lengths = _hit_lengths(hits, rng, long_ok=True, length=length)
+        motif = stamp_hits(0, hits, lengths)
         if not motif:
-            stamp_hits(0, [0], [8])
-            used, used_len, motif = [0], [8], [lo]
+            motif = stamp_hits(0, [0], [8])
+            hits, lengths = [0], [8]
         invert_from = 2 if phrase == "call_answer" else 99
         if variance >= 0.85:
             invert_from = min(invert_from, 1)
         for bar in range(1, BARS):
-            bar_hits = used
-            bar_lens = used_len
-            if variance > 0.5:
-                bar_hits = _vary_hits(used, rng, variance)
-                bar_lens = _hit_lengths(bar_hits, rng, long_ok=True, length=length)
             stamp_hits(
                 bar,
-                bar_hits,
-                bar_lens,
+                hits,
+                lengths,
                 invert=bar >= invert_from,
-                motif_pitches=motif,
+                motif_pitches=motif if replay_pitches() else None,
             )
 
     if density < 0.8:
@@ -1670,23 +1784,26 @@ def apply_key(progression: dict[str, Any], key: str) -> dict[str, Any]:
     if not isinstance(progression, dict) or not progression:
         raise ValueError("progression required")
     rid = progression.get("recipe_id")
-    if rid in RECIPES:
+    chords = progression.get("chords") or []
+    romans = [
+        str(c.get("roman") or "i")
+        for c in chords
+        if isinstance(c, dict)
+    ]
+    rec = RECIPES.get(rid) if rid in RECIPES else None
+    if rec and len(romans) == BARS and list(rec["romans"]) == romans:
         recipe: str | dict[str, Any] = rid
-    else:
-        chords = progression.get("chords") or []
-        romans = [
-            str(c.get("roman") or "i")
-            for c in chords
-            if isinstance(c, dict)
-        ]
-        if len(romans) != BARS:
-            raise ValueError("progression must have 4 chords")
+    elif len(romans) == BARS:
         recipe = {
-            "id": rid or "custom",
+            "id": "custom",
             "label": progression.get("label") or "–".join(romans),
             "romans": romans,
             "pad_seventh": bool(progression.get("pad_seventh")),
         }
+    elif rec:
+        recipe = rid
+    else:
+        raise ValueError("progression must have 4 chords")
     out = realize(recipe, key)
     out["locked"] = bool(progression.get("locked"))
     out["style_used"] = progression.get("style_used") or ""

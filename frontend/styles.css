@@ -552,7 +552,7 @@ html[data-theme="rainbow"] .slot.serum {
   appearance: none;
   font: inherit;
   cursor: pointer;
-  min-width: 2.6em;
+  min-width: 3.4em;
   text-align: center;
   padding: 6px 10px;
   border-radius: 6px;
@@ -590,6 +590,17 @@ html[data-theme="rainbow"] .slot.serum {
 
 .theme-roman.muted.on {
   opacity: 0.7;
+}
+
+.theme-roman.unused {
+  opacity: 0.32;
+  color: var(--text-faint);
+  background: var(--bg-muted, #12141a);
+  cursor: not-allowed;
+}
+
+.theme-roman.unused:disabled {
+  opacity: 0.32;
 }
 
 .theme-chord-picker {
@@ -963,7 +974,7 @@ html[data-theme="rainbow"] .slot.serum {
 
 .section-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 10px;
@@ -1005,16 +1016,20 @@ html[data-theme="rainbow"] .slot.serum {
 .add-track-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--border);
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 .btn.add-track-btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
   border-style: dashed;
   color: var(--text-dim);
   background: transparent;
@@ -1041,7 +1056,7 @@ html[data-theme="rainbow"] .slot.serum {
   color: var(--text);
   font: inherit;
   font-size: 0.8rem;
-  padding: 8px 10px;
+  padding: 7px 10px;
   cursor: pointer;
 }
 
@@ -1117,6 +1132,44 @@ html[data-theme="rainbow"] .slot.serum {
 .slot.optional .slot-name {
   color: var(--text-faint);
   font-style: italic;
+}
+
+.slot-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.slot-name-row .slot-name {
+  flex: 0 1 auto;
+  width: max-content;
+  min-width: 0;
+  max-width: calc(100% - 26px);
+}
+
+.icon-btn.preset-lock {
+  width: 20px;
+  height: 20px;
+  font-size: 0.68rem;
+  flex-shrink: 0;
+  padding: 0;
+  line-height: 1;
+  color: #6b7280;
+  filter: grayscale(1);
+  opacity: 0.8;
+}
+
+.icon-btn.preset-lock.on {
+  color: #fbbf24;
+  filter: none;
+  opacity: 1;
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.45);
+  text-shadow: 0 0 8px rgba(251, 191, 36, 0.35);
+  /* 🔒 sits optically right of center at this size */
+  padding-right: 2px;
 }
 
 .slot.locked:not(.muted) {
@@ -3045,6 +3098,10 @@ dialog:has(.dialog-card-wide) {
 .midi-bar-btn.muted {
   opacity: 0.4;
   text-decoration: line-through;
+}
+
+.midi-bar-btn[hidden] {
+  display: none;
 }
 
 .midi-grid-wrap {

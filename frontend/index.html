@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>REROLL — By Austin Russell</title>
-  <link rel="stylesheet" href="styles.css?v=dblclick-midi" />
+  <title>reroll</title>
+  <link rel="stylesheet" href="styles.css?v=bars-1" />
 </head>
 <body>
   <div class="app">
@@ -23,7 +23,7 @@
           </svg>
         </a>
         <div>
-          <h1>REROLL</h1>
+          <h1>reroll</h1>
           <p class="tagline">By Austin Russell · Your collection, infinite ideas</p>
         </div>
       </div>
@@ -59,8 +59,13 @@
           <option>Prog house</option>
           <option>Trance</option>
           <option selected>Techno</option>
+          <option>Peak-time techno</option>
           <option>House</option>
         </select>
+      </label>
+      <label class="field">
+        <span>Bars</span>
+        <input type="number" id="bars" value="1" min="1" max="4" step="1" />
       </label>
       <div class="field theme-inline" id="theme-panel">
         <span>Chords</span>
@@ -160,39 +165,38 @@
       <section class="slots" aria-label="Loop slots">
         <div class="section-head">
           <h2>Loop</h2>
+          <div class="add-track-row">
+            <select id="add-track-type" class="add-track-type" aria-label="New track type" data-tip="Type for the new track">
+              <option value="kick">Kick</option>
+              <option value="clap">Clap</option>
+              <option value="hats">Hats</option>
+              <option value="perc">Perc</option>
+              <option value="fx">FX</option>
+              <option value="vocal">Vocals</option>
+              <option value="lead_audio">Lead (audio)</option>
+              <option value="bass_audio">Bass (audio)</option>
+              <option value="bass" selected>Bass (Serum)</option>
+              <option value="lead">Lead (Serum)</option>
+              <option value="brass">Brass (Serum)</option>
+              <option value="chorus">Chorus (Serum)</option>
+              <option value="pad">Pad (Serum)</option>
+              <option value="guitar">Guitar (Serum)</option>
+              <option value="keys">Keys (Serum)</option>
+              <option value="strings">Strings (Serum)</option>
+              <option value="arp">Arp (Serum)</option>
+              <option value="pluck">Pluck (Serum)</option>
+              <option value="seq">Seq (Serum)</option>
+              <option value="synth">Synth (Serum)</option>
+              <option value="hoover">Hoover (Serum)</option>
+            </select>
+            <button type="button" class="btn add-track-btn" id="btn-add-track" aria-label="Add track" data-tip="Add a track to the stack">
+              <span class="add-track-plus" aria-hidden="true">+</span>
+            </button>
+          </div>
         </div>
 
         <div class="slot-list" id="slot-list">
           <!-- tracks built by app.js -->
-        </div>
-        <div class="add-track-row">
-          <button type="button" class="btn add-track-btn" id="btn-add-track" data-tip="Add a track to the stack">
-            <span class="add-track-plus" aria-hidden="true">+</span>
-            <span>Add track</span>
-          </button>
-          <select id="add-track-type" class="add-track-type" aria-label="New track type" data-tip="Type for the new track">
-            <option value="kick">Kick</option>
-            <option value="clap">Clap</option>
-            <option value="hats">Hats</option>
-            <option value="perc">Perc</option>
-            <option value="fx">FX</option>
-            <option value="vocal">Vocals</option>
-            <option value="lead_audio">Lead (audio)</option>
-            <option value="bass_audio">Bass (audio)</option>
-            <option value="bass" selected>Bass (Serum)</option>
-            <option value="lead">Lead (Serum)</option>
-            <option value="brass">Brass (Serum)</option>
-            <option value="chorus">Chorus (Serum)</option>
-            <option value="pad">Pad (Serum)</option>
-            <option value="guitar">Guitar (Serum)</option>
-            <option value="keys">Keys (Serum)</option>
-            <option value="strings">Strings (Serum)</option>
-            <option value="arp">Arp (Serum)</option>
-            <option value="pluck">Pluck (Serum)</option>
-            <option value="seq">Seq (Serum)</option>
-            <option value="synth">Synth (Serum)</option>
-            <option value="hoover">Hoover (Serum)</option>
-          </select>
         </div>
       </section>
 
@@ -335,7 +339,7 @@
   <dialog id="save-dialog">
     <form method="dialog" class="dialog-card" id="save-form">
       <h2>Save loop</h2>
-      <p class="hint">Name this idea so you can reload it from My Loops.</p>
+      <p class="hint">Each save is a new loop in My Loops. Same name is fine — it won’t replace an older one.</p>
       <label class="field block">
         <span>Name</span>
         <input type="text" id="save-name" maxlength="80" placeholder="e.g. Fmin techno groove" autocomplete="off" required />
@@ -470,6 +474,6 @@
 
   <script src="midi.js?v=midi-shape"></script>
   <script src="harmony.js?v=theme-v1"></script>
-  <script src="app.js?v=chord-lock"></script>
+  <script src="app.js?v=bars-1"></script>
 </body>
 </html>

@@ -15,6 +15,7 @@ from backend.app import (
 )
 from backend.harmony import (
     RECIPES,
+    THEME_ROMANS_PEAK,
     _MOTIF_RHYTHMS,
     _MOTIF_RHYTHMS_DENSE,
     _style_recipe_weights,
@@ -22,6 +23,7 @@ from backend.harmony import (
     apply_harmony,
     apply_key,
     chord_enabled,
+    rewrite_lead_grid,
     edit_chords,
     effective_chords,
     dice_bass_grid,
@@ -29,6 +31,7 @@ from backend.harmony import (
     dice_lead,
     dice_lead_grid,
     harmony_role,
+    is_peak_time_style,
     pc_to_degree_alter,
     is_two_cell_recipe,
     pick_recipe,
@@ -36,6 +39,7 @@ from backend.harmony import (
     realize,
     rewrite_bass_grid,
     rewrite_pad_grid,
+    theme_romans_for_style,
     tonic_minor_label,
 )
 from backend.midi_util import degree_to_midi, grid_to_notes
@@ -57,6 +61,8 @@ def test_recipe_table():
         "i_i_VI_VI",
         "i_VI_i_VI",
         "i_iv_i_iv",
+        "i_i_sus4_sus4",
+        "i_sus4_i_sus4",
     }
     for rec in RECIPES.values():
         assert len(rec["romans"]) == 4
@@ -134,6 +140,49 @@ def test_edit_chords_set_roman_and_cannot_mute_last():
     assert sum(1 for c in muted["chords"] if chord_enabled(c)) == 1
 
 
+def test_set_chords_sus4_changes_color_tone():
+    prog = realize("pedal_i", "F minor")
+    bass_src = rewrite_bass_grid(prog, octave=2)
+    lead_src = rewrite_lead_grid(prog, octave=4)
+    out = apply_edited_harmony(
+        key="F minor",
+        progression=prog,
+        tracks=[
+            {"id": "bass", "type": "bass", "octave": 2, "midi": bass_src},
+            {
+                "id": "lead",
+                "type": "lead",
+                "octave": 4,
+                "midi": {**lead_src, "source": "progression"},
+            },
+        ],
+        bar=1,
+        roman="sus4",
+    )
+    assert out["progression"]["chords"][1]["roman"] == "sus4"
+    assert out["progression"]["chords"][1]["quality"] == "sus4"
+    assert out["progression"]["chords"][1]["pcs"] == [5, 10, 0]
+    bass = out["midi"]["bass"]
+    lead = out["midi"]["lead"]
+    bar1_bass = [s for s in range(16, 32) if bass["grid"][s]]
+    bar1_lead = [s for s in range(16, 32) if lead["grid"][s]]
+    assert bar1_bass
+    degs = [bass["grid"][s]["degree"] for s in bar1_bass]
+    assert 3 in degs
+    assert degs[0] == 0
+    notes = [n for n in _lead_notes(bass, 2) if 4.0 <= n["start_beat"] < 8.0]
+    assert any(n["midi"] % 12 == 10 for n in notes)  # Bb
+    assert bar1_lead
+    assert any(lead["grid"][s]["degree"] == 3 for s in bar1_lead)
+
+
+def test_apply_key_keeps_custom_sus4():
+    prog = edit_chords(realize("pedal_i", "F minor"), "F minor", bar=2, roman="sus4")
+    moved = apply_key(prog, "C major")
+    assert [c["roman"] for c in moved["chords"]] == ["i", "i", "sus4", "i"]
+    assert moved["chords"][2]["pcs"] == [0, 5, 7]
+
+
 def test_set_chords_rewrites_bass_roots():
     prog = realize("pedal_i", "F minor")
     out = apply_edited_harmony(
@@ -163,6 +212,38 @@ def test_style_weights_prefer_prog_house():
     two = {rid: weights[rid] for rid in RECIPES if is_two_cell_recipe(rid)}
     assert two["i_i_VI_VI"] == max(two.values())
     assert two["i_i_VI_VI"] >= two["pedal_i"]
+
+
+def test_realize_sus4_is_tonic_fourth():
+    prog = realize("i_i_sus4_sus4", "F minor")
+    assert [c["roman"] for c in prog["chords"]] == ["i", "i", "sus4", "sus4"]
+    sus = prog["chords"][2]
+    assert sus["quality"] == "sus4"
+    assert sus["root_pc"] == 5
+    assert sus["pcs"] == [5, 10, 0]
+    assert sus["intervals"] == [0, 5, 7]
+    edited = edit_chords(realize("pedal_i", "F minor"), "F minor", bar=1, roman="sus4")
+    assert edited["chords"][1]["roman"] == "sus4"
+    assert edited["chords"][1]["pcs"] == [5, 10, 0]
+
+
+def test_peak_time_palette_and_two_chord_default():
+    assert is_peak_time_style("Peak-time techno")
+    assert is_peak_time_style("peak time")
+    assert not is_peak_time_style("Techno")
+    assert theme_romans_for_style("Peak-time techno") == THEME_ROMANS_PEAK
+    weights = _style_recipe_weights("Peak-time techno")
+    assert weights["pedal_i"] == 0
+    assert weights["i_iv_i_iv"] == 0
+    assert weights["i_VI_III_VII"] == 0
+    assert weights["i_i_VI_VI"] > 0
+    assert weights["i_i_sus4_sus4"] > 0
+    allowed = set(THEME_ROMANS_PEAK)
+    for i in range(40):
+        rec = pick_recipe("Peak-time techno", rng=__import__("random").Random(i))
+        assert is_two_cell_recipe(rec["id"])
+        assert recipe_unique_count(rec["id"]) == 2
+        assert set(rec["romans"]) <= allowed
 
 
 def test_style_weights_techno_prefers_held():
@@ -203,7 +284,7 @@ def test_pick_recipe_techno_usually_held():
 
 
 def test_pick_recipe_only_two_cell():
-    for style in ("", "techno", "prog house", "trance", "melodic techno"):
+    for style in ("", "techno", "prog house", "trance", "melodic techno", "peak-time techno"):
         for i in range(20):
             rec = pick_recipe(style, rng=__import__("random").Random(i))
             assert is_two_cell_recipe(rec["id"]), (style, rec["id"])
@@ -505,26 +586,130 @@ def test_dice_lead_length_short_vs_long():
     assert sum(long_avg) > sum(short_avg) * 1.4
 
 
-def test_dice_lead_variance_repeat_vs_vary():
+def _bar_intervals(midi: dict) -> list[tuple[int, ...]]:
+    notes = _lead_notes(midi, 4)
+    out: list[tuple[int, ...]] = []
+    for bar in range(4):
+        pitches = [
+            n["midi"] for n in notes if int(n["start_beat"] // 4) == bar
+        ]
+        if len(pitches) < 2:
+            out.append(())
+        else:
+            out.append(tuple(p - pitches[0] for p in pitches[1:]))
+    return out
+
+
+def test_dice_lead_variance_keeps_hits_changes_pitches():
     prog = realize("i_VI_III_VII", "F minor")
-    identical = 0
+    pitch_changed = 0
+    for seed in range(40):
+        frozen = dice_lead_grid(
+            prog, "F minor", seed=seed, octave=4, density=0.75, variance=0.0, length=0.4
+        )
+        varied = dice_lead_grid(
+            prog, "F minor", seed=seed, octave=4, density=0.75, variance=1.0, length=0.4
+        )
+        assert _bar_hits(frozen) == _bar_hits(varied)
+        assert _lead_hit_count(frozen) == _lead_hit_count(varied)
+        fh = _bar_hits(frozen)
+        # Pickup phrases hold the last bar; every other phrase repeats the gate.
+        if not str(frozen["patternId"]).endswith("sparse_pickup"):
+            assert fh[0] and all(h == fh[0] for h in fh[1:])
+        pa = [n["midi"] for n in _lead_notes(frozen, 4)]
+        pb = [n["midi"] for n in _lead_notes(varied, 4)]
+        if pa != pb:
+            pitch_changed += 1
+    assert pitch_changed >= 16
+
+
+def test_dice_lead_variance_zero_repeats_runner_contour():
+    prog = realize("pedal_i", "F minor")
+    same = 0
     different = 0
-    for seed in range(40):
-        midi = dice_lead_grid(
-            prog, "F minor", seed=seed, octave=4, density=0.5, variance=0.0, length=0.5
+    for seed in range(24):
+        frozen = dice_lead_grid(
+            prog,
+            "F minor",
+            seed=seed,
+            octave=4,
+            density=0.8,
+            variance=0.0,
+            length=0.3,
+            phrase="runner",
         )
-        hits = _bar_hits(midi)
-        if hits[0] and all(h == hits[0] for h in hits[1:]):
-            identical += 1
-    for seed in range(40):
-        midi = dice_lead_grid(
-            prog, "F minor", seed=seed, octave=4, density=0.55, variance=1.0, length=0.5
+        varied = dice_lead_grid(
+            prog,
+            "F minor",
+            seed=seed,
+            octave=4,
+            density=0.8,
+            variance=1.0,
+            length=0.3,
+            phrase="runner",
         )
-        hits = _bar_hits(midi)
-        if hits[0] and any(h != hits[0] for h in hits[1:]):
+        assert _bar_hits(frozen) == _bar_hits(varied)
+        fi = _bar_intervals(frozen)
+        vi = _bar_intervals(varied)
+        if fi[0] and all(x == fi[0] for x in fi[1:]):
+            same += 1
+        if vi[0] and any(x != vi[0] for x in vi[1:]):
             different += 1
-    assert identical >= 18
+    assert same >= 18
     assert different >= 8
+
+
+def test_dice_lead_density_keeps_fraction_of_sequence():
+    prog = realize("i_VI_III_VII", "F minor")
+    ratios = []
+    for seed in range(36):
+        full = dice_lead_grid(
+            prog,
+            "F minor",
+            seed=seed,
+            octave=4,
+            density=1.0,
+            variance=0.5,
+            length=0.3,
+            phrase="runner",
+        )
+        part = dice_lead_grid(
+            prog,
+            "F minor",
+            seed=seed,
+            octave=4,
+            density=0.8,
+            variance=0.5,
+            length=0.3,
+            phrase="runner",
+        )
+        full_hits = set(_bar_hits(full)[0])
+        part_hits = set(_bar_hits(part)[0])
+        assert part_hits <= full_hits
+        if full_hits:
+            ratios.append(len(part_hits) / len(full_hits))
+    assert ratios
+    avg = sum(ratios) / len(ratios)
+    assert 0.70 <= avg <= 0.90
+
+
+def test_bass_variance_keeps_hits():
+    prog = realize("pedal_i", "F minor")
+    changed = 0
+    for seed in range(24):
+        frozen = dice_bass_grid(
+            prog, octave=2, seed=seed, density=0.75, variance=0.0, length=0.3, kind="runner"
+        )
+        varied = dice_bass_grid(
+            prog, octave=2, seed=seed, density=0.75, variance=1.0, length=0.3, kind="runner"
+        )
+        assert _bar_hits(frozen) == _bar_hits(varied)
+        assert all(h == _bar_hits(frozen)[0] for h in _bar_hits(frozen))
+        pa = [n["midi"] for n in _lead_notes(frozen, 2)]
+        pb = [n["midi"] for n in _lead_notes(varied, 2)]
+        if pa != pb:
+            changed += 1
+    assert changed >= 8
 
 
 def test_dice_lead_shape_clamped():

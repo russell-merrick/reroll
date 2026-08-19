@@ -137,6 +137,7 @@ class SaveLoopRequest(BaseModel):
 
     name: str
     bpm: int = 140
+    bars: int | None = None
     key: str = "F minor"
     style: str = ""
     options: dict[str, Any] = Field(default_factory=dict)
@@ -234,6 +235,7 @@ class UserSettings(BaseModel):
     """Persistent UI prefs (Options + session BPM/key/style)."""
 
     bpm: int = 140
+    bars: int = 1
     key: str = "F minor"
     style: str = "Techno"
     filterRisers: bool = True
@@ -295,6 +297,17 @@ def _normalize_settings_dict(data: dict[str, Any], *, source: dict[str, Any] | N
         base["bpm"] = max(60, min(200, bpm))
     except (TypeError, ValueError):
         base["bpm"] = 140
+    try:
+        bars = int(base.get("bars", 1))
+    except (TypeError, ValueError):
+        bars = 1
+    if bars <= 1:
+        bars = 1
+    elif bars == 2:
+        bars = 2
+    else:
+        bars = 4
+    base["bars"] = bars
     if "filterRisers" in src:
         base["filterRisers"] = bool(src.get("filterRisers"))
     else:
@@ -1696,6 +1709,8 @@ def save_loop(body: SaveLoopRequest) -> dict[str, Any]:
         "saved_at": now,
         "version": 1,
     }
+    if body.bars in (1, 2, 4):
+        doc["bars"] = int(body.bars)
     if stored_prog is not None:
         doc["progression"] = stored_prog
     path.write_text(json.dumps(doc, indent=2), encoding="utf-8")

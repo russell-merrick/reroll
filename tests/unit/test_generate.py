@@ -8,6 +8,7 @@ from collections import Counter
 from backend.catalog import Catalog
 from backend.generate import (
     catalog_style_suggestions,
+    generate_tracks,
     get_slot_kind,
     is_riser_like,
     pick_asset,
@@ -301,3 +302,64 @@ def test_catalog_style_suggestions_empty_catalog():
     c = Catalog()
     c.scanned = True
     assert catalog_style_suggestions(c) == []
+
+
+def test_generate_tracks_preset_locked_keeps_path_not_full_lock(sample_catalog: Catalog):
+    kept = r"C:\Xfer\Serum Presets\Presets\Splice\BA_mine.fxp"
+    out = generate_tracks(
+        sample_catalog,
+        [
+            {
+                "id": "bass__1",
+                "type": "bass",
+                "preset_locked": True,
+                "locked": False,
+                "path": kept,
+                "name": "keep me",
+                "kind": "serum",
+            }
+        ],
+    )
+    slot = out["slots"]["bass__1"]
+    assert slot["path"] == kept
+    assert slot["name"] == "keep me"
+    assert slot["locked"] is False
+    assert slot["preset_locked"] is True
+
+
+def test_generate_tracks_preset_locked_camel_case(sample_catalog: Catalog):
+    kept = r"C:\Xfer\Serum Presets\Presets\Splice\BA_mine.fxp"
+    out = generate_tracks(
+        sample_catalog,
+        [
+            {
+                "id": "bass__1",
+                "type": "bass",
+                "presetLocked": True,
+                "path": kept,
+                "name": "keep me",
+                "kind": "serum",
+            }
+        ],
+    )
+    assert out["slots"]["bass__1"]["path"] == kept
+
+
+def test_generate_tracks_full_lock_still_keeps_path(sample_catalog: Catalog):
+    kept = r"C:\lib\kicks\kick_01.wav"
+    out = generate_tracks(
+        sample_catalog,
+        [
+            {
+                "id": "kick__1",
+                "type": "kick",
+                "locked": True,
+                "path": kept,
+                "name": "locked kick",
+                "kind": "sample",
+            }
+        ],
+    )
+    slot = out["slots"]["kick__1"]
+    assert slot["path"] == kept
+    assert slot["locked"] is True

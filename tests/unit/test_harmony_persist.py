@@ -36,6 +36,42 @@ def _lead_slot(midi: dict) -> dict:
     }
 
 
+def test_two_saves_without_id_are_separate(tmp_path: Path, monkeypatch):
+    dest = _saves(tmp_path, monkeypatch)
+    first = save_loop(
+        SaveLoopRequest(
+            name="Take A",
+            key="F minor",
+            track_order=["kick"],
+            slots={"kick": {"type": "kick"}},
+        )
+    )
+    second = save_loop(
+        SaveLoopRequest(
+            name="Take B",
+            key="F minor",
+            track_order=["kick"],
+            slots={"kick": {"type": "kick"}},
+        )
+    )
+    assert first["id"] != second["id"]
+    files = sorted(p.name for p in dest.glob("*.json"))
+    assert len(files) == 2
+    assert get_loop(first["id"])["name"] == "Take A"
+    assert get_loop(second["id"])["name"] == "Take B"
+    same_a = save_loop(
+        SaveLoopRequest(
+            name="Take A",
+            key="F minor",
+            track_order=["kick"],
+            slots={"kick": {"type": "kick"}},
+        )
+    )
+    assert same_a["id"] != first["id"]
+    assert get_loop(first["id"])["name"] == "Take A"
+    assert len(list(dest.glob("*.json"))) == 3
+
+
 def test_new_save_omits_progression_when_missing(tmp_path: Path, monkeypatch):
     _saves(tmp_path, monkeypatch)
     out = save_loop(

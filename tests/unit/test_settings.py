@@ -19,6 +19,7 @@ def test_default_settings_shape(tmp_path: Path, monkeypatch):
     assert d["sampleRoots"] == []
     assert d["serumRoots"] == []
     assert d["theme"] == "dark"
+    assert d["bars"] == 1
     assert 60 <= d["bpm"] <= 200
 
 
@@ -60,6 +61,16 @@ def test_write_preserves_roots_when_omitted(tmp_path: Path, monkeypatch):
     assert loaded["bpm"] == 128
     assert loaded["serumRoots"] == [r"D:\presets"]
     assert loaded["sampleRoots"] == [r"D:\samples"]
+
+
+def test_bars_snapped_to_1_2_4(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(backend_app, "SETTINGS_PATH", tmp_path / "s.json")
+    assert backend_app._write_user_settings({"bars": 1})["bars"] == 1
+    assert backend_app._write_user_settings({"bars": 2})["bars"] == 2
+    assert backend_app._write_user_settings({"bars": 3})["bars"] == 4
+    assert backend_app._write_user_settings({"bars": 4})["bars"] == 4
+    assert backend_app._write_user_settings({"bars": 0})["bars"] == 1
+    assert backend_app._write_user_settings({"bars": 8})["bars"] == 4
 
 
 def test_bpm_clamped(tmp_path: Path, monkeypatch):
