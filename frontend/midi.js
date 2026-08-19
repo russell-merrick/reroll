@@ -1,7 +1,10 @@
 /**
- * Monophonic MIDI helpers — scale degrees in the selected key.
- * Patterns are 16th-note grids (1 bar default), expanded to LOOP_BARS (4) for export/play.
+ * MIDI helpers — scale degrees in the selected key.
+ * Patterns are 16th-note grids (1 bar default). A bars*16 grid is not tiled again.
  */
+
+const STEPS_PER_BAR = 16;
+const PAD_ROLES = ["pad", "pads", "strings", "chorus", "keys"];
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
@@ -40,13 +43,44 @@ function scaleDegrees(quality) {
 }
 
 /** MIDI note from scale degree (0=root … 6=7th) + octave (MIDI octave, C4=60). */
-function degreeToMidi(keyStr, degree, octave = 3) {
+function degreeToMidi(keyStr, degree, octave = 3, alter = 0) {
   const { root, quality } = parseKey(keyStr);
   const ints = scaleDegrees(quality);
   const d = ((degree % 7) + 7) % 7;
   const interval = ints[d];
   // MIDI: C4 = 60 → octave 4
-  return (octave + 1) * 12 + root + interval;
+  return (octave + 1) * 12 + root + interval + (Number(alter) || 0);
+}
+
+/** Map a pitch class to (Aeolian degree 0–6, semitone alter). Quality is ignored. */
+function pcToDegreeAlter(pc, keyStr) {
+  const { root } = parseKey(keyStr);
+  const ints = SCALE_INTERVALS.minor;
+  const rel = (((Number(pc) - root) % 12) + 12) % 12;
+  for (let deg = 0; deg < ints.length; deg++) {
+    if (ints[deg] === rel) return { degree: deg, alter: 0 };
+  }
+  for (let deg = 0; deg < ints.length; deg++) {
+    if ((ints[deg] + 1) % 12 === rel) return { degree: deg, alter: 1 };
+  }
+  for (let deg = 0; deg < ints.length; deg++) {
+    if ((ints[deg] + 11) % 12 === rel) return { degree: deg, alter: -1 };
+  }
+  let bestDeg = 0;
+  let bestAlt = 0;
+  let bestDist = 99;
+  for (let deg = 0; deg < ints.length; deg++) {
+    let signed = rel - ints[deg];
+    if (signed > 6) signed -= 12;
+    if (signed < -6) signed += 12;
+    const dist = Math.abs(signed);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestDeg = deg;
+      bestAlt = signed;
+    }
+  }
+  return { degree: bestDeg, alter: bestAlt };
 }
 
 function midiToName(midi) {
@@ -175,11 +209,95 @@ function place(grid, step, degree, length, vel) {
   };
 }
 
-/** Resize note at `start` to `length` 16ths (keeps pitch/vel). */
+/**
+ * Place a polyphonic cell. Clears overlaps; keeps `voices`.
+ * Primary degree/vel stay on the cell for the mono editor + summary.
+ */
+function placeVoices(grid, step, voices, length, vel) {
+  if (!grid || step < 0 || step >= grid.length) return;
+  const vs = Array.isArray(voices)
+    ? voices.filter((v) => v && typeof v === "object").map((v) => ({ ...v }))
+    : [];
+  if (!vs.length) return;
+  const len = clampLength(step, length, grid.length);
+  const newEnd = step + len;
+  for (let s = 0; s < grid.length; s++) {
+    const cell = grid[s];
+    if (!cell) continue;
+    const end = s + clampLength(s, cell.length || 1, grid.length);
+    if (s < newEnd && end > step) grid[s] = null;
+  }
+  const primary = vs[0];
+  const cell = {
+    degree: ((Number(primary.degree) % 7) + 7) % 7,
+    length: len,
+    vel: vel ?? primary.vel ?? 100,
+    voices: vs,
+  };
+  if (primary.alter) cell.alter = primary.alter;
+  grid[step] = cell;
+}
+
+/** Resize note at `start` to `length` 16ths (keeps pitch/vel/voices). */
 function setNoteLength(grid, start, length) {
   const cell = grid[start];
   if (!cell) return;
+  if (Array.isArray(cell.voices) && cell.voices.length) {
+    const voices = cell.voices.map((v) => ({ ...v }));
+    const deg = cell.degree;
+    const alter = cell.alter;
+    const oct = cell.oct;
+    placeVoices(grid, start, voices, length, cell.vel ?? 100);
+    if (grid[start]) {
+      grid[start].degree = deg;
+      if (alter) grid[start].alter = alter;
+      if (oct != null) grid[start].oct = oct;
+    }
+    return;
+  }
+  const alter = cell.alter;
+  const oct = cell.oct;
   place(grid, start, cell.degree, length, cell.vel ?? 100);
+  if (grid[start]) {
+    if (alter) grid[start].alter = alter;
+    if (oct != null) grid[start].oct = oct;
+  }
+}
+
+/** Cycle inversion: move the lowest sounding voice up one octave. */
+function invertCellVoices(cell, octave, keyStr) {
+  if (!cell || typeof cell !== "object") return cell;
+  const key = keyStr || "C minor";
+  const oct0 = octave ?? 3;
+  let voices;
+  if (Array.isArray(cell.voices) && cell.voices.length) {
+    voices = cell.voices.map((v) => ({ ...v }));
+  } else {
+    voices = [
+      {
+        degree: cell.degree ?? 0,
+        oct: cell.oct ?? oct0,
+        vel: cell.vel ?? 100,
+      },
+    ];
+    if (cell.alter) voices[0].alter = cell.alter;
+  }
+  let lo = 0;
+  let loMidi = Infinity;
+  for (let i = 0; i < voices.length; i++) {
+    const oct = voices[i].oct ?? oct0;
+    const midi = degreeToMidi(key, voices[i].degree ?? 0, oct, voices[i].alter ?? 0);
+    if (midi < loMidi) {
+      loMidi = midi;
+      lo = i;
+    }
+  }
+  const moved = { ...voices[lo], oct: (voices[lo].oct ?? oct0) + 1 };
+  voices.splice(lo, 1);
+  voices.push(moved);
+  cell.voices = voices;
+  cell.degree = voices[0].degree ?? cell.degree;
+  return cell;
 }
 
 function fillHits(steps, degree, length, vel) {
@@ -198,32 +316,63 @@ function buildPatternGrid(patternId) {
 }
 
 function defaultOctave(role) {
-  return role === "bass" ? 2 : 4; // bass ~C2, lead ~C4
+  if (role === "bass") return 2;
+  if (PAD_ROLES.includes(role)) return 3;
+  return 4;
 }
 
 function defaultPatternId(role) {
-  return role === "bass" ? "root-quarters" : "scale-walk";
+  return role === "bass" ? "root-quarters" : "techno-gallop";
+}
+
+/** Repeat count: a bars*16 grid is already a full loop — do not tile again. */
+function expandBars(grid, bars) {
+  const n = (grid && grid.length) || STEPS_PER_BAR;
+  if (n === Number(bars) * STEPS_PER_BAR) return 1;
+  return Math.max(1, Number(bars) || 1);
+}
+
+/** Voices to emit. Missing/empty `voices` → the cell's single degree. */
+function cellVoices(cell) {
+  if (!cell || typeof cell !== "object") return [];
+  if (Array.isArray(cell.voices) && cell.voices.length) return cell.voices;
+  const out = {
+    degree: cell.degree ?? 0,
+    alter: cell.alter ?? 0,
+    vel: cell.vel ?? 100,
+  };
+  if (cell.oct != null) out.oct = cell.oct;
+  return [out];
 }
 
 /**
  * Expand 1-bar grid to N bars of note events (default 4-bar loop).
+ * If grid.length === bars*16, emit once (no double-tile).
  * @returns {{ step: number, duration: number, midi: number, vel: number, degree: number }[]}
  */
 function gridToNotes(grid, keyStr, octave, bars = 4) {
   const notes = [];
+  if (!grid || !grid.length) return notes;
   const barSteps = grid.length;
-  for (let bar = 0; bar < bars; bar++) {
+  const reps = expandBars(grid, bars);
+  for (let bar = 0; bar < reps; bar++) {
     for (let s = 0; s < barSteps; s++) {
       const cell = grid[s];
       if (!cell) continue;
       const step = bar * barSteps + s;
-      notes.push({
-        step,
-        duration: cell.length || 1,
-        midi: degreeToMidi(keyStr, cell.degree, octave),
-        vel: cell.vel ?? 100,
-        degree: cell.degree,
-      });
+      for (const voice of cellVoices(cell)) {
+        const deg = voice.degree ?? cell.degree ?? 0;
+        const octv = voice.oct ?? cell.oct ?? octave;
+        const alter = voice.alter ?? cell.alter ?? 0;
+        const vel = voice.vel ?? cell.vel ?? 100;
+        notes.push({
+          step,
+          duration: cell.length || 1,
+          midi: degreeToMidi(keyStr, deg, octv, alter),
+          vel,
+          degree: deg,
+        });
+      }
     }
   }
   return notes;
@@ -233,11 +382,13 @@ function gridToNotes(grid, keyStr, octave, bars = 4) {
 function midiSummary(midiState, keyStr) {
   if (!midiState || !midiState.grid) return "no MIDI";
   const hits = midiState.grid.filter(Boolean).length;
+  const n = midiState.grid.length || STEPS_PER_BAR;
   const pat =
     listPatterns().find((p) => p.id === midiState.patternId)?.name ||
     midiState.patternId ||
     "custom";
-  return `${pat} · ${hits}/16 · ${keyStr} · oct ${midiState.octave}`;
+  const key = keyStr || midiState.key || "";
+  return `${pat} · ${hits}/${n} · ${key} · oct ${midiState.octave}`;
 }
 
 function createMidiState(role, keyStr) {
@@ -247,8 +398,13 @@ function createMidiState(role, keyStr) {
     patternId,
     octave,
     key: keyStr,
+    bars: 1,
+    source: "pattern",
     grid: buildPatternGrid(patternId),
-    locked: false, // MIDI lock separate later if needed
+    locked: false,
+    density: 0.5,
+    variance: 0.5,
+    length: 0.5,
   };
 }
 
@@ -263,20 +419,27 @@ function randomizeGridInKey(role) {
 window.MidiEngine = {
   parseKey,
   degreeToMidi,
+  pcToDegreeAlter,
   midiToName,
   listPatterns,
   buildPatternGrid,
   defaultOctave,
   defaultPatternId,
+  expandBars,
+  cellVoices,
   gridToNotes,
   midiSummary,
   createMidiState,
   randomizeGridInKey,
   emptyGrid,
   place,
+  placeVoices,
+  invertCellVoices,
   findNoteAt,
   setNoteLength,
   clampLength,
+  STEPS_PER_BAR,
+  PAD_ROLES,
   PATTERN_LIBRARY,
   NOTE_NAMES,
   /** Common lengths in 16ths for the editor toolbar */

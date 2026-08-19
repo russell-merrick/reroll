@@ -617,7 +617,9 @@ def generate_tracks(
 ) -> dict[str, Any]:
     """
     Fill a dynamic track list.
-    Each track: {id, type, locked?, path?, serum_engine?, serum_type?, ...}
+    Each track: {id, type, locked?, preset_locked?, path?, serum_engine?, serum_type?, ...}
+    `locked` keeps the whole track (sound + MIDI on the client).
+    `preset_locked` keeps the sound/preset only so MIDI can still change.
     Returns slots keyed by track id.
     """
     slots_out: dict[str, Any] = {}
@@ -626,11 +628,15 @@ def generate_tracks(
         ttype = str(t.get("type") or tid.split("__")[0] or "synth")
         if not tid:
             continue
-        if t.get("locked") and t.get("path"):
+        keep_sound = bool(
+            t.get("locked") or t.get("preset_locked") or t.get("presetLocked")
+        ) and t.get("path")
+        if keep_sound:
             slots_out[tid] = {
                 "role": ttype,
                 "id": tid,
-                "locked": True,
+                "locked": bool(t.get("locked")),
+                "preset_locked": bool(t.get("preset_locked")),
                 "empty": False,
                 "path": t.get("path"),
                 "name": t.get("name") or "",

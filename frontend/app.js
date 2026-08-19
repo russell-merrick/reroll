@@ -30,6 +30,10 @@ const state = {
   currentLoopId: null,
   /** Last saved / loaded display name */
   currentLoopName: null,
+  /** Session theme — empty until first Dice chords. */
+  progression: null,
+  /** Top-bar lock: Reroll must not replace the chord progression. */
+  themeLocked: false,
 };
 
 const THEME_IDS = ["dark", "light", "neon", "rainbow"];
@@ -40,13 +44,13 @@ const THEME_IDS = ["dark", "light", "neon", "rainbow"];
  */
 const INSTRUMENT_DEFS = [
   { id: "kick", label: "Kick", type: "kick", defaultOn: true, tip: "Kick samples" },
-  { id: "hats", label: "Hats", type: "hats", defaultOn: true, tip: "Hi-hat samples" },
-  { id: "clap", label: "Clap", type: "clap", defaultOn: true, tip: "Clap / snare samples" },
+  { id: "hats", label: "Hats", type: "hats", defaultOn: false, tip: "Hi-hat samples" },
+  { id: "clap", label: "Clap", type: "clap", defaultOn: false, tip: "Clap / snare samples" },
   {
     id: "lead_audio",
     label: "Lead (audio)",
     type: "lead_audio",
-    defaultOn: true,
+    defaultOn: false,
     tip: "Lead / synth audio samples (not Serum)",
   },
   {
@@ -55,6 +59,13 @@ const INSTRUMENT_DEFS = [
     type: "bass",
     defaultOn: true,
     tip: "Serum bass presets + MIDI",
+  },
+  {
+    id: "lead",
+    label: "Lead (Serum)",
+    type: "lead",
+    defaultOn: false,
+    tip: "Serum lead presets + MIDI",
   },
   {
     id: "bass_audio",
@@ -148,6 +159,154 @@ function isSerumTrack(id) {
   return isSerumType(baseType(id));
 }
 
+function midiRoleForSlot(role) {
+  const hr = harmonyRole(baseType(role));
+  if (hr === "bass" || hr === "pad") return hr;
+  return "lead";
+}
+
+function slotMidiKey(role) {
+  const k = state.slots[role]?.midi?.key;
+  if (k) return k;
+  return $("#key")?.value || "F minor";
+}
+
+function markMidiUser(role) {
+  const ed = midiEditors[role];
+  if (ed) {
+    ed.draft.source = "user";
+    ed.draft.patternId = "custom";
+  }
+  if (state.slots[role]?.midi) state.slots[role].midi.source = "user";
+  markMidiCustom(role);
+}
+
+function themePlayBar() {
+  if (!isPlaying) return -1;
+  const n = getLoopBars();
+  const steps = scheduler.totalSteps || n * 16;
+  const step = Math.floor(getCycleProgress() * steps);
+  return Math.min(n - 1, Math.max(0, Math.floor(step / 16)));
+}
+
+function highlightThemeBar() {
+  const romansEl = $("#theme-romans");
+  if (!romansEl) return;
+  const bar = themePlayBar();
+  romansEl.querySelectorAll(".theme-roman").forEach((el) => {
+    const i = Number(el.dataset.bar);
+    el.classList.toggle("on", isPlaying && Number.isFinite(i) && i === bar);
+  });
+}
+
+function isThemeLocked() {
+  return Boolean(state.themeLocked);
+}
+
+/** Track lock: freeze preset and MIDI on Reroll. */
+function isTrackLocked(role) {
+  return Boolean(state.slots[role]?.locked);
+}
+
+/** Preset lock (or track lock): freeze the sound; MIDI may still change. */
+function isPresetFrozen(role) {
+  const s = state.slots[role];
+  return Boolean(s?.locked || s?.presetLocked);
+}
+
+/** Stamp lock onto whatever progression object we adopt. */
+function setProgression(prog) {
+  if (!prog || typeof prog !== "object") {
+    state.progression = null;
+    return;
+  }
+  const next = cloneProgression(prog) || prog;
+  next.locked = isThemeLocked();
+  state.progression = next;
+}
+
+function setThemeLocked(on) {
+  state.themeLocked = Boolean(on);
+  if (state.progression) state.progression.locked = state.themeLocked;
+}
+
+function syncThemeLockFromProgression() {
+  state.themeLocked = Boolean(state.progression?.locked);
+}
+
+function updateGenerateTip() {
+  const btn = $("#btn-generate");
+  if (!btn) return;
+  btn.dataset.tip = isThemeLocked()
+    ? "Reroll sounds — chords stay locked"
+    : "Reroll sounds, chords, and bass (unlocked tracks / unlocked theme)";
+}
+
+function renderThemePanel() {
+  const panel = $("#theme-panel");
+  if (!panel) return;
+  const prog = state.progression;
+  const locked = isThemeLocked();
+  panel.classList.toggle("locked", locked);
+
+  const romansEl = $("#theme-romans");
+  if (romansEl) {
+    const chords = prog?.chords;
+    romansEl.innerHTML = "";
+    if (!chords?.length) {
+      const empty = document.createElement("span");
+      empty.className = "theme-roman empty";
+      empty.textContent = "— no theme —";
+      romansEl.appendChild(empty);
+    } else {
+      const bar = themePlayBar();
+      const loopBars = getLoopBars();
+      for (let i = 0; i < 4; i++) {
+        const cell = document.createElement("button");
+        cell.type = "button";
+        const muted = chords[i]?.enabled === false;
+        const unused = i >= loopBars;
+        cell.className =
+          "theme-roman" +
+          (isPlaying && i === bar && !unused ? " on" : "") +
+          (muted ? " muted" : "") +
+          (unused ? " unused" : "");
+        cell.dataset.bar = String(i);
+        cell.textContent = chords[i]?.roman || "—";
+        cell.disabled = locked || unused;
+        cell.dataset.tip = unused
+          ? `Bar ${i + 1} unused — set Bars to ${i < 2 ? 2 : 4}`
+          : locked
+            ? "Chords locked — Reroll won't change these"
+            : muted
+              ? "Off — loop wraps to the first on chord · click to enable · hold to change"
+              : "Click to turn off (loop restarts) · hold to change chord";
+        bindThemeRomanCell(cell, i);
+        romansEl.appendChild(cell);
+      }
+    }
+  }
+
+  const meta = $("#theme-meta");
+  if (meta) {
+    meta.textContent = prog
+      ? themeSubtitle(prog, $("#key")?.value || "")
+      : "";
+  }
+
+  const lockBtn = $("#btn-theme-lock");
+  if (lockBtn) {
+    lockBtn.disabled = false;
+    lockBtn.classList.toggle("on", locked);
+    lockBtn.setAttribute("aria-pressed", String(locked));
+    lockBtn.textContent = locked ? "🔒" : "🔓";
+    lockBtn.dataset.tip = locked
+      ? "Unlock chords — Reroll may change the progression"
+      : "Lock chords — Reroll keeps this progression";
+  }
+  updateGenerateTip();
+}
+
 function newTrackId(type) {
   trackSeq += 1;
   // Keep first of each type as bare name for readability
@@ -189,8 +348,9 @@ let previewGen = 0;
 /** @type {Record<string, GainNode>} */
 let trackGains = {};
 
-/** Session loop length in bars — change this (and restart play) to try 8 later. */
+/** Max session loop length. Live length is 1, 2, or 4 via #bars. */
 const LOOP_BARS = 4;
+const ALLOWED_LOOP_BARS = [1, 2, 4];
 
 /** Look-ahead loop scheduler — reads BPM live so tempo can change mid-play. */
 const scheduler = {
@@ -203,11 +363,11 @@ const scheduler = {
   phraseRoles: {},
   nextStep: 0,
   nextNoteTime: 0,
-  /** LOOP_BARS × 16 sixteenths (4 bars → 16 quarter-note kicks). */
-  totalSteps: LOOP_BARS * 16,
+  /** Live BARS × 16 sixteenths (default 1 bar). */
+  totalSteps: 16,
   /** @type {ReturnType<typeof setInterval> | null} */
   timerId: null,
-  bars: LOOP_BARS,
+  bars: 1,
 };
 
 const LOOKAHEAD_SEC = 0.15;
@@ -251,6 +411,43 @@ function getBpm() {
   const n = Number($("#bpm")?.value || 140);
   if (!Number.isFinite(n)) return 140;
   return Math.min(200, Math.max(60, n));
+}
+
+/** Session loop length: 1, 2, or 4 bars. */
+function getLoopBars() {
+  const n = Number($("#bars")?.value);
+  if (n === 1 || n === 2 || n === 4) return n;
+  if (scheduler.bars === 1 || scheduler.bars === 2 || scheduler.bars === 4) {
+    return scheduler.bars;
+  }
+  return 1;
+}
+
+function snapLoopBars(raw, prev) {
+  const n = Number(raw);
+  if (n === 1 || n === 2 || n === 4) return n;
+  const from = prev === 1 || prev === 2 || prev === 4 ? prev : getLoopBars();
+  if (!Number.isFinite(n)) return from;
+  if (n > from) {
+    return ALLOWED_LOOP_BARS.find((a) => a > from) ?? 4;
+  }
+  const down = [...ALLOWED_LOOP_BARS].reverse().find((a) => a < from);
+  return down ?? 1;
+}
+
+function applyLoopBars(n) {
+  const bars = n === 1 || n === 2 || n === 4 ? n : snapLoopBars(n, getLoopBars());
+  const el = $("#bars");
+  if (el) el.value = String(bars);
+  scheduler.bars = bars;
+  scheduler.totalSteps = bars * 16;
+  if (scheduler.nextStep >= scheduler.totalSteps) {
+    scheduler.nextStep %= scheduler.totalSteps;
+  }
+  for (const ed of Object.values(midiEditors)) {
+    if (ed && ed.barIndex >= bars) ed.barIndex = 0;
+  }
+  return bars;
 }
 
 function secPer16th() {
@@ -625,9 +822,11 @@ function drawWaveformFrame() {
     if (isPlaying) {
       const bar = Math.min(bars, Math.floor(progress * bars) + 1);
       const beat = Math.floor(((progress * bars) % 1) * 4) + 1;
-      meta.textContent = `${bpm} BPM · ${bars} bars · bar ${bar}.${beat}`;
+      const barWord = bars === 1 ? "bar" : "bars";
+      meta.textContent = `${bpm} BPM · ${bars} ${barWord} · bar ${bar}.${beat}`;
     } else if (any) {
-      meta.textContent = `Stopped · ${bars} bars @ ${bpm} BPM`;
+      const barWord = bars === 1 ? "bar" : "bars";
+      meta.textContent = `Stopped · ${bars} ${barWord} @ ${bpm} BPM`;
     } else {
       meta.textContent = "Idle · play to build";
     }
@@ -635,6 +834,7 @@ function drawWaveformFrame() {
 
   const section = $("#wave-overview");
   section?.classList.toggle("is-playing", isPlaying);
+  highlightThemeBar();
 }
 
 function waveRafLoop() {
@@ -806,15 +1006,27 @@ function tipForButton(btn) {
       ? "Unsolo this track"
       : "Solo this track (mute others)";
   }
+  if (btn.id === "btn-theme-lock") {
+    return isThemeLocked()
+      ? "Unlock chords — Reroll may change the progression"
+      : "Lock chords — Reroll keeps this progression";
+  }
+  if (btn.classList.contains("preset-lock")) {
+    return btn.dataset.tip || (btn.classList.contains("on")
+      ? "Unlock preset — Reroll may change the sound"
+      : "Lock preset — Reroll may still change MIDI");
+  }
   if (btn.classList.contains("lock")) {
     return btn.classList.contains("on")
-      ? "Unlock — allow Reroll to change this track"
-      : "Lock — keep this sound on Reroll";
+      ? "Unlock — allow Reroll to change preset and MIDI"
+      : "Lock — keep preset and MIDI on Reroll";
   }
   if (btn.classList.contains("dice")) return "Reroll this track only";
   if (btn.classList.contains("loop-delete")) return "Delete this saved loop";
   if (btn.classList.contains("delete")) return "Remove this track from the stack";
-  if (btn.classList.contains("serum-m")) return "Edit MIDI pattern";
+  if (btn.classList.contains("serum-m")) {
+    return "Edit MIDI pattern · or double-click the track";
+  }
   if (btn.classList.contains("serum-engine")) return "Serum engine filter (use Options)";
 
   return btn.getAttribute("aria-label") || "";
@@ -842,8 +1054,9 @@ function initBottomTips() {
     ],
     [
       "#style",
-      "Soft lean for Reroll / dice. Suggestions come from your library packs. “No preference” / empty = true random",
+      "Leans Reroll picks and chord recipes. No preference = random",
     ],
+    ["#bars", "Loop length — 1, 2, or 4 bars (waveform, chords, MIDI)"],
   ].forEach(([sel, tip]) => {
     const el = $(sel);
     if (el) el.dataset.tip = tip;
@@ -1419,13 +1632,23 @@ function syncPreviewBtn(role) {
       : "Loop this sample (toggle to stop)";
 }
 
+function midiLoopBars(midi) {
+  if (!midi) return 1;
+  let n = 1;
+  if (midi.bars === 4 || (Array.isArray(midi.grid) && midi.grid.length === 64)) n = 4;
+  else if (midi.bars === 2 || (Array.isArray(midi.grid) && midi.grid.length === 32)) n = 2;
+  else n = midi.bars || (midi.grid?.length > 16 ? 4 : 1);
+  return Math.min(n, getLoopBars());
+}
+
 function scheduleMidiPreviewBar(role, when) {
   if (!window.MidiEngine) return;
   const s = state.slots[role];
   if (!s?.midi?.grid) return;
-  const key = $("#key")?.value || "F minor";
+  const key = slotMidiKey(role);
   const step16 = secPer16th();
-  const notes = MidiEngine.gridToNotes(s.midi.grid, key, s.midi.octave, 1);
+  const bars = midiLoopBars(s.midi);
+  const notes = MidiEngine.gridToNotes(s.midi.grid, key, s.midi.octave, bars);
   for (const n of notes) {
     scheduleSynthNote(
       n.midi,
@@ -1437,10 +1660,11 @@ function scheduleMidiPreviewBar(role, when) {
   }
 }
 
-/** Arm next MIDI preview bar (BPM-live). */
+/** Arm next MIDI preview cycle (BPM-live). */
 function armMidiPreviewLoop(role) {
   if (previewLoopRole !== role || !audioCtx) return;
-  const barSec = secPer16th() * 16;
+  const bars = midiLoopBars(state.slots[role]?.midi);
+  const barSec = secPer16th() * 16 * bars;
   const t0 = audioCtx.currentTime + 0.03;
   scheduleMidiPreviewBar(role, t0);
   if (previewMidiTimer != null) clearTimeout(previewMidiTimer);
@@ -1570,7 +1794,7 @@ function scheduleSynthNote(midi, when, durationSec, role, vel = 100) {
 
   osc.start(when);
   osc.stop(end + 0.02);
-  activeSources.push({ src: osc, gain });
+  activeSources.push({ src: osc, gain, role });
   osc.onended = () => {
     activeSources = activeSources.filter((s) => s.src !== osc);
   };
@@ -1578,7 +1802,6 @@ function scheduleSynthNote(midi, when, durationSec, role, vel = 100) {
 
 function scheduleMidiAtStep(step, when) {
   if (!window.MidiEngine) return;
-  const key = $("#key")?.value || "F minor";
   const step16 = secPer16th();
 
   for (const role of activeTrackIds()) {
@@ -1588,14 +1811,23 @@ function scheduleMidiAtStep(step, when) {
     const midiState = state.slots[role]?.midi;
     if (!midiState?.grid) continue;
     // Mute via track gain; still schedule so unmute mid-note works for future notes
-    const barStep = step % 16;
-    const cell = midiState.grid[barStep];
+    const n = midiState.grid.length || 16;
+    const idx = step % n;
+    const cell = midiState.grid[idx];
     if (!cell) continue;
-    const t = baseType(role);
-    const oct = midiState.octave ?? MidiEngine.defaultOctave(t === "bass" ? "bass" : "lead");
-    const note = MidiEngine.degreeToMidi(key, cell.degree, oct);
+    const key = slotMidiKey(role);
+    const oct =
+      midiState.octave ?? MidiEngine.defaultOctave(midiRoleForSlot(role));
+    const voices = MidiEngine.cellVoices(cell);
     const dur = Math.max(0.05, (cell.length || 1) * step16 * 0.95);
-    scheduleSynthNote(note, when, dur, role, cell.vel ?? 100);
+    for (const voice of voices) {
+      const deg = voice.degree ?? cell.degree ?? 0;
+      const octv = voice.oct ?? cell.oct ?? oct;
+      const alter = voice.alter ?? cell.alter ?? 0;
+      const vel = voice.vel ?? cell.vel ?? 100;
+      const note = MidiEngine.degreeToMidi(key, deg, octv, alter);
+      scheduleSynthNote(note, when, dur, role, vel);
+    }
   }
 }
 
@@ -1615,6 +1847,40 @@ function stopSourcesForRole(role) {
     }
   }
   activeSources = keep;
+}
+
+/** Drop a track from the live graph so delete/mute-remove doesn't keep sounding. */
+function teardownPlayingTrack(role) {
+  if (!role) return;
+  trackRefreshGen[role] = (trackRefreshGen[role] || 0) + 1;
+  if (liveMidiRefreshTimers[role]) {
+    clearTimeout(liveMidiRefreshTimers[role]);
+    delete liveMidiRefreshTimers[role];
+  }
+  stopSourcesForRole(role);
+  const g = trackGains[role];
+  if (g) {
+    try {
+      if (audioCtx) {
+        const now = audioCtx.currentTime;
+        g.gain.cancelScheduledValues(now);
+        g.gain.setValueAtTime(0, now);
+      }
+      g.disconnect();
+    } catch {
+      /* ok */
+    }
+    delete trackGains[role];
+  }
+  delete scheduler.buffers[role];
+  delete scheduler.phraseRoles[role];
+  scheduler.playable = scheduler.playable.filter((r) => r !== role);
+  delete serumStemRoles[role];
+  delete serumStemMeta[role];
+  delete serumRefreshing[role];
+  delete serumPendingBuffer[role];
+  delete serumPendingJs[role];
+  markWaveDirty();
 }
 
 /**
@@ -1981,7 +2247,7 @@ async function renderOneSerumStem(role, opts = {}) {
   if (!pl.endsWith(".fxp") && !pl.endsWith(".serumpreset")) return null;
 
   const bpm = getBpm();
-  const key = $("#key")?.value || "F minor";
+  const key = slotMidiKey(role);
   const bars = scheduler.bars || LOOP_BARS;
   if (!opts.quiet) setStatus(`Rendering Serum · ${role}…`);
 
@@ -1990,7 +2256,7 @@ async function renderOneSerumStem(role, opts = {}) {
     bpm,
     bars,
     key,
-    octave: s.midi.octave ?? (baseType(role) === "bass" ? 2 : 4),
+    octave: s.midi.octave ?? MidiEngine.defaultOctave(midiRoleForSlot(role)),
     fxp: s.path,
     grid: s.midi.grid,
   };
@@ -2433,6 +2699,28 @@ function scheduleSerumRefreshForNewBpm() {
   }, 200);
 }
 
+function onBarsInput() {
+  const el = $("#bars");
+  const prev = scheduler.bars === 1 || scheduler.bars === 2 || scheduler.bars === 4
+    ? scheduler.bars
+    : 1;
+  const next = snapLoopBars(el?.value, prev);
+  if (el) el.value = String(next);
+  if (next === prev) return;
+  applyLoopBars(next);
+  renderThemePanel();
+  for (const id of Object.keys(midiEditors)) renderMidiEditor(id);
+  markWaveDirty();
+  if (!isPlaying) {
+    drawWaveformFrame();
+    setStatus(`Loop ${next} bar${next === 1 ? "" : "s"}`);
+    return;
+  }
+  invalidateSerumStemsForBpmChange();
+  scheduleSerumRefreshForNewBpm();
+  setStatus(`Loop ${next} bar${next === 1 ? "" : "s"} · re-bouncing Serum…`);
+}
+
 function onBpmInput() {
   markWaveDirty();
   if (!isPlaying) {
@@ -2517,8 +2805,23 @@ function applySlot(role, data) {
   const slot = ensureSlotEl(role);
   if (!slot) return;
 
+  const prevSlot = state.slots[role] || {};
+  // Preset lock / track lock: never replace the sound from a generate/dice payload.
+  if ((prevSlot.locked || prevSlot.presetLocked) && prevSlot.path) {
+    data = {
+      ...data,
+      path: prevSlot.path,
+      name: prevSlot.name,
+      kind: prevSlot.kind,
+      pack: prevSlot.pack,
+      meta: prevSlot.meta,
+      ext: prevSlot.ext,
+      empty: prevSlot.empty,
+    };
+  }
+
   // Drop cached buffer if path changed
-  const prev = state.slots[role]?.path;
+  const prev = prevSlot.path;
   const pathChanged = Boolean(prev && data.path && prev !== data.path);
   if (pathChanged) {
     bufferCache.delete(prev);
@@ -2539,11 +2842,15 @@ function applySlot(role, data) {
     keepMacros = copyMacros(state.slots[role]?.macros);
   }
   const keepTrackType =
-    state.slots[role]?.type || data.type || data.role || baseType(role);
+    prevSlot.type || data.type || data.role || baseType(role);
+  const prevPresetLocked = Boolean(prevSlot.presetLocked);
+  const incomingPresetLocked =
+    data.presetLocked !== undefined ? data.presetLocked : data.preset_locked;
   state.slots[role] = {
     ...data,
     type: keepTrackType,
     locked: Boolean(state.slots[role]?.locked || data.locked),
+    presetLocked: Boolean(prevPresetLocked || incomingPresetLocked),
     muted,
     solo,
     midi: keepMidi,
@@ -2577,7 +2884,7 @@ function applySlot(role, data) {
 
   // Keep meta showing MIDI summary for serum roles
   if (isSerumTrack(role) && state.slots[role]?.midi && window.MidiEngine) {
-    const key = $("#key")?.value || "F minor";
+    const key = slotMidiKey(role);
     const sum = MidiEngine.midiSummary(state.slots[role].midi, key);
     if (metaEl && data.kind === "serum") {
       const fullMeta = `${data.meta || "Serum"} · ${sum}`;
@@ -2707,37 +3014,48 @@ function renderLibrary(summary) {
   if (summary.serum_categories) {
     populateSerumTypeSelects(summary.serum_categories);
   }
-  populateStylePresets(summary.styles);
 }
 
-/**
- * Fill Style datalist from catalog-inferred genres (top packs in this library).
- * Always keeps "No preference" first; free text still allowed.
- */
-function populateStylePresets(styles) {
-  const dl = $("#style-presets");
-  if (!dl) return;
-  const labels = [];
-  if (Array.isArray(styles)) {
-    for (const s of styles) {
-      const label = typeof s === "string" ? s : s?.label;
-      if (label && String(label).trim()) labels.push(String(label).trim());
+const STYLE_PRESETS = [
+  "No preference",
+  "Melodic techno",
+  "Prog house",
+  "Trance",
+  "Techno",
+  "Peak-time techno",
+  "House",
+];
+
+function normalizeStyleValue(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "No preference";
+  const hit = STYLE_PRESETS.find((p) => p.toLowerCase() === s.toLowerCase());
+  return hit || "No preference";
+}
+
+function setStyleValue(raw) {
+  const el = $("#style");
+  if (!el) return;
+  el.value = normalizeStyleValue(raw);
+}
+
+/** Open the Style list on click of the whole field (label included). */
+function bindStylePickerOpen() {
+  const el = $("#style");
+  const field = $("#style-field") || el?.closest(".field");
+  if (!el || !field) return;
+  field.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    el.focus();
+    if (typeof el.showPicker === "function") {
+      try {
+        el.showPicker();
+      } catch {
+        /* showPicker can throw if not from a user gesture / unsupported */
+      }
     }
-  }
-  dl.innerHTML = "";
-  const add = (value) => {
-    const opt = document.createElement("option");
-    opt.value = value;
-    dl.appendChild(opt);
-  };
-  add("No preference");
-  const seen = new Set(["no preference"]);
-  for (const label of labels) {
-    const key = label.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    add(label);
-  }
+  });
 }
 
 async function loadLibrary() {
@@ -2784,20 +3102,431 @@ async function doScan() {
 function ensureSlotMidi(role) {
   if (!window.MidiEngine) return null;
   if (!isSerumTrack(role)) return null;
-  const key = $("#key")?.value || "F minor";
   if (!state.slots[role]) state.slots[role] = {};
-  const midiRole = baseType(role) === "bass" ? "bass" : "lead";
   if (!state.slots[role].midi) {
-    state.slots[role].midi = MidiEngine.createMidiState(midiRole, key);
-  } else {
-    state.slots[role].midi.key = key;
+    state.slots[role].midi = MidiEngine.createMidiState(
+      midiRoleForSlot(role),
+      $("#key")?.value || "F minor"
+    );
   }
+  // do NOT assign midi.key here — undo/load already cloned it
   return state.slots[role].midi;
 }
 
-function rekeyAllMidi() {
+function midiShapeFrom(midi) {
+  const n = (v) => {
+    const x = Number(v);
+    return Number.isFinite(x) ? Math.min(1, Math.max(0, x)) : 0.5;
+  };
+  return {
+    density: n(midi?.density),
+    variance: n(midi?.variance),
+    length: n(midi?.length),
+  };
+}
+
+function harmonyTracksPayload(onlyId, opts = {}) {
+  const skipLocked = Boolean(opts.skipLocked);
+  return activeTrackIds()
+    .filter((id) => isSerumTrack(id))
+    .filter((id) => !onlyId || id === onlyId)
+    .filter((id) => !skipLocked || !isTrackLocked(id))
+    .map((id) => {
+      const s = state.slots[id] || {};
+      return {
+        id,
+        type: baseType(id),
+        midi: cloneMidi(s.midi),
+        octave: s.midi?.octave ?? null,
+        ...midiShapeFrom(s.midi),
+      };
+    });
+}
+
+function applyHarmonyMidi(midiMap, opts = {}) {
+  const ids = Object.keys(midiMap || {});
+  for (const id of ids) {
+    if (!state.slots[id]) continue;
+    if (opts.skipLocked && isTrackLocked(id)) continue;
+    const keep = midiShapeFrom(state.slots[id].midi);
+    const next = cloneMidi(midiMap[id]);
+    if (next) Object.assign(next, keep);
+    state.slots[id].midi = next;
+    applySlot(id, { ...state.slots[id] });
+    if (midiEditors[id]) {
+      midiEditors[id].draft = {
+        ...midiEditors[id].draft,
+        ...cloneMidi(midiMap[id]),
+        ...keep,
+      };
+      renderMidiEditor(id);
+    }
+    if (isPlaying) {
+      // Notes changed — drop the old stem on the next tick (JS synth)
+      // while the 4-bar bounce runs. keepOld would leave the previous
+      // progression audible for seconds and feel like a no-op.
+      beginProvisionalJsSynth(id);
+      refreshPlayingTrack(id, {
+        provisionalJs: true,
+        keepOldUntilReady: false,
+      }).catch((e) => console.warn(`theme refresh ${id}:`, e));
+    }
+  }
+  return ids;
+}
+
+function rewrittenRoleLabels(ids) {
+  const labels = [];
+  for (const id of ids) {
+    const r = harmonyRole(baseType(id));
+    if (r === "bass") labels.push("bass");
+    else if (r === "pad") labels.push("pads");
+    else if (r === "lead") labels.push("lead");
+  }
+  return [...new Set(labels)];
+}
+
+function hasUnlockedHarmonyRole(role) {
+  return activeTrackIds().some(
+    (id) =>
+      isSerumTrack(id) &&
+      !isTrackLocked(id) &&
+      harmonyRole(baseType(id)) === role
+  );
+}
+
+/**
+ * Reroll MIDI for tracks that are not fully locked.
+ * Theme lock keeps the chord progression; patterns still change.
+ * Lead is not rewritten by dice-chords, so Reroll dices it separately.
+ */
+async function rerollUnlockedMidi() {
+  const themeFrozen = Boolean(state.progression && isThemeLocked());
+  if (!themeFrozen) {
+    await diceChords({ skipUndo: true });
+  }
+  if (!state.progression) return;
+  if (themeFrozen && hasUnlockedHarmonyRole("bass")) {
+    await diceBass({ skipUndo: true });
+  }
+  if (hasUnlockedHarmonyRole("lead")) {
+    await diceLead({ skipUndo: true });
+  }
+}
+
+async function diceChords(opts = {}) {
+  if (state.progression && isThemeLocked()) {
+    setStatus("Chords locked — unlock to reroll them");
+    return;
+  }
+  const tracks = harmonyTracksPayload(undefined, { skipLocked: true });
+  const res = await api("/api/harmony/dice-chords", {
+    method: "POST",
+    body: JSON.stringify({
+      key: $("#key")?.value || "F minor",
+      style: ($("#style")?.value || "").trim(),
+      avoid_recipe_id: state.progression?.recipe_id || null,
+      locked: Boolean(state.progression && isThemeLocked()),
+      tracks,
+    }),
+  });
+  if (!opts.skipUndo) pushUndo("Dice chords");
+  setProgression(res.progression);
+  const ids = applyHarmonyMidi(res.midi || {}, { skipLocked: true });
+  console.info("Theme apply", res.progression?.recipe_id, ids);
+  renderThemePanel();
+  const label =
+    res.progression?.label || formatRomans(res.progression) || "theme";
+  if (!ids.length) {
+    const hasBass = activeTrackIds().some(
+      (id) => harmonyRole(baseType(id)) === "bass"
+    );
+    setStatus(
+      hasBass
+        ? `Theme · ${label}`
+        : `Theme · ${label} · Add a Bass (Serum) track`
+    );
+    return;
+  }
+  const who = rewrittenRoleLabels(ids).join(", ") || ids.join(", ");
+  setStatus(`Theme · ${label} · rewrote ${who} · bouncing…`);
+}
+
+function toggleThemeLock() {
+  pushUndo(isThemeLocked() ? "Unlock chords" : "Lock chords");
+  setThemeLocked(!isThemeLocked());
+  renderThemePanel();
+  setStatus(
+    isThemeLocked()
+      ? "Chords locked — Reroll keeps this progression"
+      : "Chords unlocked — Reroll may change them"
+  );
+}
+
+async function diceBass(opts = {}) {
+  if (!state.progression) {
+    setStatus("No theme — Dice chords first");
+    return;
+  }
+  if (opts.trackId && isTrackLocked(opts.trackId)) {
+    setStatus(`${opts.trackId} is locked — unlock to change MIDI`);
+    return;
+  }
+  const res = await api("/api/harmony/dice-bass", {
+    method: "POST",
+    body: JSON.stringify({
+      key: $("#key")?.value || "F minor",
+      style: ($("#style")?.value || "").trim(),
+      progression: cloneProgression(state.progression),
+      tracks: harmonyTracksPayload(opts.trackId, { skipLocked: true }),
+    }),
+  });
+  const midi = res.midi || {};
+  const ids = Object.keys(midi);
+  if (!ids.length) {
+    setStatus("Theme · no bass — Add a Bass (Serum) track to dice a line");
+    return;
+  }
+  if (!opts.skipUndo) pushUndo("Dice bass");
+  applyHarmonyMidi(midi, { skipLocked: true });
+  console.info("Theme bass", state.progression?.recipe_id, ids);
+  const label =
+    state.progression?.label || formatRomans(state.progression) || "theme";
+  const kind = String(midi[ids[0]]?.patternId || "").replace("prog-", "");
+  setStatus(`Theme · ${label} · bass ${kind || "line"} · bouncing…`);
+}
+
+async function diceLead(opts = {}) {
+  if (!state.progression) {
+    setStatus("No theme — Dice chords first");
+    return;
+  }
+  if (opts.trackId && isTrackLocked(opts.trackId)) {
+    setStatus(`${opts.trackId} is locked — unlock to change MIDI`);
+    return;
+  }
+  const res = await api("/api/harmony/dice-lead", {
+    method: "POST",
+    body: JSON.stringify({
+      key: $("#key")?.value || "F minor",
+      style: ($("#style")?.value || "").trim(),
+      progression: cloneProgression(state.progression),
+      tracks: harmonyTracksPayload(opts.trackId, { skipLocked: true }),
+    }),
+  });
+  const midi = res.midi || {};
+  const ids = Object.keys(midi);
+  if (!ids.length) {
+    setStatus("Theme · no lead — Add a Lead (Serum) track to dice a topline");
+    return;
+  }
+  if (!opts.skipUndo) pushUndo("Dice lead");
+  applyHarmonyMidi(midi, { skipLocked: true });
+  console.info("Theme lead", state.progression?.recipe_id, ids);
+  const label =
+    state.progression?.label || formatRomans(state.progression) || "theme";
+  setStatus(`Theme · ${label} · rewrote lead · bouncing…`);
+}
+
+function initThemePanel() {
+  $("#btn-theme-lock")?.addEventListener("click", () => toggleThemeLock());
+  document.addEventListener("pointerdown", (e) => {
+    const picker = $("#theme-chord-picker");
+    if (!picker || picker.contains(e.target)) return;
+    if (e.target?.closest?.(".theme-roman")) return;
+    closeThemeChordPicker();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeThemeChordPicker();
+  });
+  renderThemePanel();
+}
+
+const THEME_ROMANS = ["i", "ii", "III", "iv", "v", "V", "VI", "VII"];
+const THEME_ROMANS_PEAK = ["i", "VI", "VII", "sus4"];
+let themeHoldTimer = null;
+let themeHoldOpened = false;
+
+function themeRomansForStyle() {
+  const s = ($("#style")?.value || "").toLowerCase();
+  if (s.includes("peak")) return THEME_ROMANS_PEAK;
+  return THEME_ROMANS;
+}
+
+function closeThemeChordPicker() {
+  $("#theme-chord-picker")?.remove();
+}
+
+function openThemeChordPicker(bar, anchor) {
+  closeThemeChordPicker();
+  const picker = document.createElement("div");
+  picker.id = "theme-chord-picker";
+  picker.className = "theme-chord-picker";
+  picker.setAttribute("role", "listbox");
+  const cur = state.progression?.chords?.[bar]?.roman;
+  const romans = themeRomansForStyle();
+  const opts = romans.includes(cur) || !cur ? romans : [cur, ...romans];
+  for (const r of opts) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "theme-chord-opt" + (r === cur ? " current" : "");
+    btn.textContent = r;
+    btn.addEventListener("pointerdown", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      themeHoldOpened = false;
+      closeThemeChordPicker();
+      editThemeChord({ bar, roman: r }).catch((e) =>
+        setStatus(`Set chord failed: ${e.message}`)
+      );
+    });
+    picker.appendChild(btn);
+  }
+  document.body.appendChild(picker);
+  const rect = anchor.getBoundingClientRect();
+  const left = Math.min(rect.left, window.innerWidth - picker.offsetWidth - 8);
+  picker.style.left = `${Math.max(8, left)}px`;
+  picker.style.top = `${rect.bottom + 4}px`;
+}
+
+function bindThemeRomanCell(cell, bar) {
+  cell.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    if (bar >= getLoopBars()) return;
+    if (isThemeLocked()) return;
+    themeHoldOpened = false;
+    themeHoldTimer = setTimeout(() => {
+      themeHoldTimer = null;
+      themeHoldOpened = true;
+      openThemeChordPicker(bar, cell);
+    }, 400);
+  });
+  const finish = () => {
+    if (!themeHoldTimer) return;
+    clearTimeout(themeHoldTimer);
+    themeHoldTimer = null;
+    if (themeHoldOpened) return;
+    if (bar >= getLoopBars()) return;
+    const chords = state.progression?.chords || [];
+    const on = chords[bar]?.enabled !== false;
+    const nOn = chords.filter((c) => c && c.enabled !== false).length;
+    if (on && nOn <= 1) {
+      setStatus("Keep at least one chord on");
+      return;
+    }
+    editThemeChord({ bar, enabled: !on }).catch((e) =>
+      setStatus(`Toggle chord failed: ${e.message}`)
+    );
+  };
+  cell.addEventListener("pointerup", finish);
+  cell.addEventListener("pointercancel", () => {
+    if (themeHoldTimer) clearTimeout(themeHoldTimer);
+    themeHoldTimer = null;
+  });
+}
+
+async function editThemeChord({ bar, roman, enabled }) {
+  if (!state.progression) return;
+  if (bar >= getLoopBars()) return;
+  const res = await api("/api/harmony/set-chords", {
+    method: "POST",
+    body: JSON.stringify({
+      key: $("#key")?.value || "F minor",
+      progression: cloneProgression(state.progression),
+      tracks: harmonyTracksPayload(),
+      bar,
+      roman: roman ?? null,
+      enabled: enabled === undefined ? null : enabled,
+    }),
+  });
+  const label =
+    roman != null ? `Set chord · ${roman}` : enabled ? "Enable chord" : "Mute chord";
+  pushUndo(label);
+  setProgression(res.progression);
+  applyHarmonyMidi(res.midi || {});
+  renderThemePanel();
+  for (const id of Object.keys(midiEditors)) renderMidiEditor(id);
+  const shown =
+    res.progression?.label || formatRomans(res.progression) || "theme";
+  setStatus(`Theme · ${shown}`);
+}
+
+/** Write the current theme onto one new bass/pad (same recipe, still Aeolian). */
+async function applyThemeToTrack(id) {
+  if (!state.progression || !state.slots[id]) return;
+  const role = harmonyRole(baseType(id));
+  if (role !== "bass" && role !== "pad") return;
+  const res = await api("/api/harmony/apply", {
+    method: "POST",
+    body: JSON.stringify({
+      key: $("#key")?.value || "F minor",
+      progression: cloneProgression(state.progression),
+      tracks: [
+        {
+          id,
+          type: baseType(id),
+          midi: cloneMidi(state.slots[id].midi),
+          octave: state.slots[id].midi?.octave ?? null,
+        },
+      ],
+    }),
+  });
+  if (res.progression) setProgression(res.progression);
+  const ids = applyHarmonyMidi(res.midi || {});
+  console.info("Theme apply", state.progression?.recipe_id, ids);
+}
+
+/** Last committed session #key — #key.change fires after the select already moved. */
+let lastSessionKey = null;
+
+function sessionKeyValue() {
+  return $("#key")?.value || "F minor";
+}
+
+function rememberSessionKey(key) {
+  lastSessionKey = key || sessionKeyValue();
+}
+
+async function rekeyAllMidi() {
   if (!window.MidiEngine) return;
-  const key = $("#key")?.value || "F minor";
+  const key = sessionKeyValue();
+  const prevKey = lastSessionKey || key;
+  if (state.progression) {
+    const res = await api("/api/harmony/apply", {
+      method: "POST",
+      body: JSON.stringify({
+        key,
+        progression: cloneProgression(state.progression),
+        tracks: harmonyTracksPayload(),
+      }),
+    });
+    pushUndo("Key");
+    const entry = undoStack[undoStack.length - 1];
+    if (entry?.snap) entry.snap.key = prevKey;
+    rememberSessionKey(key);
+    if (res.progression) setProgression(res.progression);
+    const ids = applyHarmonyMidi(res.midi || {});
+    const rewritten = new Set(ids);
+    const minor = tonicMinorLabel(key);
+    for (const id of activeTrackIds()) {
+      const midi = state.slots[id]?.midi;
+      if (!midi || rewritten.has(id)) continue;
+      midi.key = minor;
+      applySlot(id, { ...state.slots[id] });
+      if (midiEditors[id]) {
+        midiEditors[id].draft = { ...midiEditors[id].draft, ...cloneMidi(midi) };
+        renderMidiEditor(id);
+      }
+      if (isPlaying && isSerumTrack(id)) {
+        refreshPlayingTrack(id, { keepOldUntilReady: true }).catch((e) =>
+          console.warn(`theme rekey ${id}:`, e)
+        );
+      }
+    }
+    console.info("Theme apply", state.progression?.recipe_id, ids);
+    renderThemePanel();
+    return;
+  }
   for (const role of activeTrackIds()) {
     if (state.slots[role]?.midi) {
       state.slots[role].midi.key = key;
@@ -2808,6 +3537,7 @@ function rekeyAllMidi() {
       }
     }
   }
+  rememberSessionKey(key);
 }
 
 const SERUM_ENGINE_LABEL = { s1: "Serum 1", s2: "Serum 2", both: "Serum 1+2", none: "none" };
@@ -2933,6 +3663,7 @@ function tracksPayload() {
       id,
       type: baseType(id),
       locked: Boolean(s.locked),
+      preset_locked: Boolean(s.presetLocked),
       path: s.path || null,
       name: s.name || "",
       kind: s.kind || null,
@@ -3019,6 +3750,7 @@ function collectUserSettings() {
   if (themeEl) state.options.theme = normalizeTheme(themeEl.value);
   return {
     bpm: getBpm(),
+    bars: getLoopBars(),
     key: $("#key")?.value || "F minor",
     style: ($("#style")?.value || "").trim(),
     filterRisers: Boolean(state.options.filterRisers),
@@ -3041,6 +3773,9 @@ function applyUserSettings(s) {
     const n = Number(s.bpm);
     if (bpmEl && Number.isFinite(n)) bpmEl.value = String(Math.min(200, Math.max(60, n)));
   }
+  if (s.bars != null || s.loopBars != null) {
+    applyLoopBars(snapLoopBars(s.bars ?? s.loopBars, 1));
+  }
   if (s.key != null && $("#key")) {
     const keyEl = $("#key");
     const val = String(s.key);
@@ -3051,10 +3786,9 @@ function applyUserSettings(s) {
       const opt = [...keyEl.options].find((o) => o.textContent === val);
       if (opt) keyEl.value = opt.value;
     }
+    rememberSessionKey(keyEl.value);
   }
-  if (s.style != null && $("#style")) {
-    $("#style").value = String(s.style);
-  }
+  if (s.style != null) setStyleValue(s.style);
   // Default ON when key omitted (first-run / older saves without the field)
   state.options.filterRisers =
     s.filterRisers === undefined || s.filterRisers === null
@@ -3179,11 +3913,17 @@ async function doGenerate(opts = {}) {
   pushUndo("Reroll");
   for (const [role, slot] of Object.entries(loop.slots || {})) {
     if (!state.slots[role]) continue;
-    const locked = Boolean(state.slots[role]?.locked);
+    const locked = isTrackLocked(role);
+    const presetLocked = Boolean(state.slots[role]?.presetLocked);
     const prevMidi = state.slots[role]?.midi;
     const prevType = state.slots[role]?.serumType;
     const prevTrackType = state.slots[role]?.type;
-    applySlot(role, { ...slot, locked, type: prevTrackType || slot.role });
+    applySlot(role, {
+      ...slot,
+      locked,
+      presetLocked,
+      type: prevTrackType || slot.role,
+    });
     if (isSerumTrack(role)) {
       if (prevType) state.slots[role].serumType = prevType;
       if (prevTrackType) state.slots[role].type = prevTrackType;
@@ -3192,10 +3932,17 @@ async function doGenerate(opts = {}) {
       else if (!locked) {
         state.slots[role].midi = prevMidi || ensureSlotMidi(role);
       }
-      applySlot(role, { ...state.slots[role], locked });
+      applySlot(role, { ...state.slots[role], locked, presetLocked });
     }
   }
-  const summary = `Rerolled · ${loop.bpm} BPM · ${loop.key} · ${loop.style} · ${serumEngineLabel(eng)}`;
+  try {
+    await rerollUnlockedMidi();
+  } catch (e) {
+    console.warn("reroll midi:", e);
+  }
+  const summary = `Rerolled · ${loop.bpm} BPM · ${loop.key} · ${loop.style} · ${serumEngineLabel(eng)}${
+    isThemeLocked() ? " · chords locked" : ""
+  }`;
   if (!autoPlay) {
     setStatus(`${summary} — press Play`);
     return;
@@ -3215,8 +3962,29 @@ async function doGenerate(opts = {}) {
 }
 
 async function doReroll(role) {
-  if (state.slots[role]?.locked) {
+  if (isTrackLocked(role)) {
     setStatus(`${role} is locked — unlock first`);
+    return;
+  }
+  if (isPresetFrozen(role)) {
+    if (!isSerumTrack(role)) {
+      setStatus(`${role} preset locked — unlock to change the sample`);
+      return;
+    }
+    if (!state.progression) {
+      setStatus("Preset locked — Dice chords first to change MIDI");
+      return;
+    }
+    const hr = harmonyRole(baseType(role));
+    if (hr === "bass") {
+      await diceBass({ trackId: role });
+      return;
+    }
+    if (hr === "lead") {
+      await diceLead({ trackId: role });
+      return;
+    }
+    setStatus(`Preset locked · ${role} — Reroll keeps this sound`);
     return;
   }
   const t = baseType(role);
@@ -3327,6 +4095,81 @@ async function openSerumUi(role) {
   setStatus(`Serum UI launched (pid ${result.pid}) · ${name} — close the window when done`);
 }
 
+function cloneMidiCell(c) {
+  if (!c || typeof c !== "object") return null;
+  const cell = {
+    degree: c.degree,
+    length: c.length,
+    vel: c.vel,
+  };
+  if (c.alter) cell.alter = c.alter;
+  if (c.oct != null) cell.oct = c.oct;
+  if (Array.isArray(c.voices) && c.voices.length) {
+    cell.voices = c.voices.map((v) => ({ ...v }));
+  }
+  return cell;
+}
+
+/** Tile a 16-step library pattern into each bar of a 64-step draft. */
+function applyPatternToDraft(draft, patternId) {
+  const bar = MidiEngine.buildPatternGrid(patternId);
+  const n = Array.isArray(draft.grid) && draft.grid.length === 64 ? 64 : 16;
+  if (n === 64) {
+    const out = MidiEngine.emptyGrid(64);
+    for (let b = 0; b < 4; b++) {
+      for (let s = 0; s < 16; s++) {
+        out[b * 16 + s] = cloneMidiCell(bar[s]);
+      }
+    }
+    draft.grid = out;
+    draft.bars = 4;
+  } else {
+    draft.grid = bar;
+    if (draft.bars !== 4) draft.bars = 1;
+  }
+  draft.patternId = patternId;
+  draft.source = "user";
+}
+
+function editorStepOffset(role) {
+  const ed = midiEditors[role];
+  if (!ed?.draft?.grid || ed.draft.grid.length !== 64) return 0;
+  const maxBar = Math.max(0, getLoopBars() - 1);
+  return Math.max(0, Math.min(maxBar, ed.barIndex || 0)) * 16;
+}
+
+function isPadOrVoicesEditor(role, cell) {
+  if (harmonyRole(baseType(role)) === "pad") return true;
+  return Boolean(cell && Array.isArray(cell.voices) && cell.voices.length);
+}
+
+function voicesFromProgressionBar(barIndex, octave, keyStr) {
+  const chord = state.progression?.chords?.[barIndex];
+  if (!chord || !window.MidiEngine) return null;
+  // Always Aeolian-of-tonic — ignore session / draft major quality.
+  const key = state.progression.key || keyStr || "F minor";
+  const pcs = Array.isArray(chord.pcs) ? chord.pcs : [];
+  if (!pcs.length) {
+    return [{ degree: chord.root_degree ?? 0, oct: octave, vel: 90 }];
+  }
+  const voices = [];
+  let lastMidi = -Infinity;
+  for (const pc of pcs) {
+    const mapped = MidiEngine.pcToDegreeAlter(pc, key);
+    let oct = octave;
+    let midi = MidiEngine.degreeToMidi(key, mapped.degree, oct, mapped.alter);
+    while (midi <= lastMidi) {
+      oct += 1;
+      midi = MidiEngine.degreeToMidi(key, mapped.degree, oct, mapped.alter);
+    }
+    const v = { degree: mapped.degree, oct, vel: 90 };
+    if (mapped.alter) v.alter = mapped.alter;
+    voices.push(v);
+    lastMidi = midi;
+  }
+  return voices;
+}
+
 function buildMidiEditorElement(role) {
   const sec = document.createElement("section");
   sec.className = "midi-section";
@@ -3346,14 +4189,20 @@ function buildMidiEditorElement(role) {
           <button type="button" class="btn ghost" data-action="close" data-tip="Hide this MIDI editor">Close</button>
         </div>
       </header>
+      <div class="midi-bar-pager" hidden>
+        <button type="button" class="midi-bar-btn" data-bar="0">Bar 1: —</button>
+        <button type="button" class="midi-bar-btn" data-bar="1">Bar 2: —</button>
+        <button type="button" class="midi-bar-btn" data-bar="2">Bar 3: —</button>
+        <button type="button" class="midi-bar-btn" data-bar="3">Bar 4: —</button>
+      </div>
       <div class="midi-toolbar">
         <label class="field">
           <span>Pattern</span>
           <select class="midi-pattern"></select>
         </label>
         <label class="field">
-          <span>Length</span>
-          <select class="midi-length" title="Default length for new notes"></select>
+          <span>Place</span>
+          <select class="midi-length" title="Default length for new notes you click in"></select>
         </label>
         <label class="field">
           <span>Octave</span>
@@ -3363,8 +4212,24 @@ function buildMidiEditorElement(role) {
           <span>Key</span>
           <input type="text" class="midi-key-display" readonly />
         </label>
-        <button type="button" class="btn ghost" data-action="next" data-tip="Next pattern in the dropdown list">Next pattern</button>
         <button type="button" class="btn ghost" data-action="clear" data-tip="Clear all steps">Clear</button>
+      </div>
+      <div class="midi-shape" hidden>
+        <label class="field theme-slider" data-tip="How many notes of the pattern play. 80 ≈ eight in ten. Release to re-dice this track.">
+          <span>Density <output class="midi-density-out">50</output></span>
+          <input type="range" class="midi-density" min="0" max="100" value="50" />
+          <span class="theme-slider-ends"><i>sparse</i><i>dense</i></span>
+        </label>
+        <label class="field theme-slider" data-tip="How much pitches change from bar to bar. Hits stay put. Release to re-dice this track.">
+          <span>Variance <output class="midi-variance-out">50</output></span>
+          <input type="range" class="midi-variance" min="0" max="100" value="50" />
+          <span class="theme-slider-ends"><i>repeat</i><i>vary</i></span>
+        </label>
+        <label class="field theme-slider" data-tip="Generated note length. Release to re-dice this track.">
+          <span>Length <output class="midi-length-out">50</output></span>
+          <input type="range" class="midi-hold" min="0" max="100" value="50" />
+          <span class="theme-slider-ends"><i>short</i><i>long</i></span>
+        </label>
       </div>
       <div class="midi-grid-wrap">
         <div class="midi-step-labels"></div>
@@ -3374,7 +4239,6 @@ function buildMidiEditorElement(role) {
         Click empty to place · click note to remove · Shift+click cycles degree (1–7).
         Drag the right edge of a note (or Alt+drag) to change length · monophonic.
       </p>
-      <div class="midi-preview-line mono midi-note-list"></div>
       <div class="midi-macros">
         <div class="midi-macros-head">
           <h3>Serum macros</h3>
@@ -3396,29 +4260,13 @@ function bindMidiEditorRoot(role, root) {
   on("serum", () => {
     openSerumUi(role).catch((e) => setStatus(`Open Serum failed: ${e.message || e}`));
   });
-  on("next", () => {
-    const ed = midiEditors[role];
-    const sel = $(".midi-pattern", root);
-    if (!ed || !window.MidiEngine || !sel) return;
-    const opts = [...sel.options].filter((o) => o.value && o.value !== "custom");
-    if (!opts.length) return;
-    const cur = ed.draft.patternId || sel.value;
-    let idx = opts.findIndex((o) => o.value === cur);
-    // From custom / unknown → start at first; else advance and wrap
-    idx = idx < 0 ? 0 : (idx + 1) % opts.length;
-    const id = opts[idx].value;
-    ed.draft.patternId = id;
-    ed.draft.grid = MidiEngine.buildPatternGrid(id);
-    sel.value = id;
-    renderMidiEditor(role);
-    commitMidiDraft(role);
-    setStatus(`Pattern · ${role} · ${opts[idx].textContent || id}`);
-  });
   on("clear", () => {
     const ed = midiEditors[role];
-    if (!ed) return;
-    ed.draft.grid = Array.from({ length: 16 }, () => null);
-    ed.draft.patternId = "custom";
+    if (!ed || !window.MidiEngine) return;
+    const n = ed.draft.grid?.length === 64 ? 64 : 16;
+    ed.draft.grid = MidiEngine.emptyGrid(n);
+    if (n === 64) ed.draft.bars = 4;
+    markMidiUser(role);
     renderMidiEditor(role);
     commitMidiDraft(role);
   });
@@ -3428,10 +4276,48 @@ function bindMidiEditorRoot(role, root) {
     if (!ed || !window.MidiEngine) return;
     const id = sel.value;
     if (id === "custom") return;
-    ed.draft.patternId = id;
-    ed.draft.grid = MidiEngine.buildPatternGrid(id);
+    applyPatternToDraft(ed.draft, id);
+    if (state.slots[role]?.midi) state.slots[role].midi.source = "user";
     renderMidiEditor(role);
     commitMidiDraft(role);
+  });
+  root.querySelectorAll(".midi-bar-btn").forEach((btn) => {
+    const bar = Number(btn.dataset.bar) || 0;
+    let holdTimer = null;
+    let held = false;
+    btn.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      held = false;
+      holdTimer = setTimeout(() => {
+        holdTimer = null;
+        held = true;
+        if (bar < getLoopBars() && state.progression && !isThemeLocked()) {
+          openThemeChordPicker(bar, btn);
+        }
+      }, 400);
+    });
+    btn.addEventListener("pointerup", () => {
+      if (holdTimer) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+      }
+    });
+    btn.addEventListener("pointercancel", () => {
+      if (holdTimer) clearTimeout(holdTimer);
+      holdTimer = null;
+    });
+    btn.addEventListener("click", (e) => {
+      if (held) {
+        e.preventDefault();
+        held = false;
+        return;
+      }
+      if (bar >= getLoopBars()) return;
+      const ed = midiEditors[role];
+      if (!ed) return;
+      ed.barIndex = bar;
+      renderMidiEditor(role);
+    });
   });
   const lenSel = $(".midi-length", root);
   lenSel?.addEventListener("change", () => {
@@ -3440,20 +4326,72 @@ function bindMidiEditorRoot(role, root) {
     ed.draft.noteLength = Math.max(1, Math.min(16, Number(lenSel.value) || 2));
   });
   const oct = $(".midi-octave", root);
-  oct?.addEventListener("change", () => {
-    const ed = midiEditors[role];
-    if (!ed) return;
-    ed.draft.octave = Number(oct.value);
-    renderMidiEditor(role);
-    commitMidiDraft(role);
-  });
-  oct?.addEventListener("input", () => {
-    const ed = midiEditors[role];
-    if (!ed) return;
-    ed.draft.octave = Number(oct.value);
-    renderMidiEditor(role);
-    commitMidiDraft(role, { silent: true });
-  });
+  oct?.addEventListener("change", () => applyMidiOctave(role, Number(oct.value)));
+  oct?.addEventListener("input", () =>
+    applyMidiOctave(role, Number(oct.value), { silent: true })
+  );
+  bindMidiShapeSliders(role, root);
+}
+
+function slider01(el) {
+  const n = Number(el?.value);
+  return Number.isFinite(n) ? Math.min(1, Math.max(0, n / 100)) : 0.5;
+}
+
+function bindMidiShapeSliders(role, root) {
+  const bind = (sel, outSel, key) => {
+    const el = $(sel, root);
+    const out = $(outSel, root);
+    if (!el) return;
+    const sync = () => {
+      if (out) out.textContent = String(el.value);
+      const ed = midiEditors[role];
+      if (!ed?.draft) return;
+      ed.draft[key] = slider01(el);
+      if (state.slots[role]?.midi) state.slots[role].midi[key] = ed.draft[key];
+    };
+    el.addEventListener("input", sync);
+    el.addEventListener("change", () => {
+      sync();
+      if (!state.progression) return;
+      const hr = harmonyRole(baseType(role));
+      if (isTrackLocked(role)) {
+        setStatus(`${role} is locked — unlock to change MIDI`);
+        return;
+      }
+      const run = hr === "bass" ? diceBass : hr === "lead" ? diceLead : null;
+      if (!run) return;
+      run({ trackId: role }).catch((e) =>
+        setStatus(`Dice ${hr} failed: ${e.message}`)
+      );
+    });
+  };
+  bind(".midi-density", ".midi-density-out", "density");
+  bind(".midi-variance", ".midi-variance-out", "variance");
+  bind(".midi-hold", ".midi-length-out", "length");
+}
+
+/** Move stored cell/voice octaves with the track octave so jumps don't stick. */
+function shiftMidiOctave(midi, delta) {
+  if (!midi || !delta || !Array.isArray(midi.grid)) return;
+  for (const cell of midi.grid) {
+    if (!cell || typeof cell !== "object") continue;
+    if (cell.oct != null) cell.oct = Number(cell.oct) + delta;
+    if (!Array.isArray(cell.voices)) continue;
+    for (const v of cell.voices) {
+      if (v && typeof v === "object" && v.oct != null) v.oct = Number(v.oct) + delta;
+    }
+  }
+}
+
+function applyMidiOctave(role, next, opts = {}) {
+  const ed = midiEditors[role];
+  if (!ed || !Number.isFinite(next)) return;
+  const prev = Number(ed.draft.octave);
+  if (Number.isFinite(prev) && next !== prev) shiftMidiOctave(ed.draft, next - prev);
+  ed.draft.octave = next;
+  renderMidiEditor(role);
+  commitMidiDraft(role, opts);
 }
 
 function closeMidiEditor(role) {
@@ -3479,32 +4417,25 @@ function openMidiEditor(role) {
     closeMidiEditor(role);
     return;
   }
-  const key = $("#key")?.value || "F minor";
+  const sessionKey = $("#key")?.value || "F minor";
   const existing = state.slots[role]?.midi;
-  const midiRole = baseType(role) === "bass" ? "bass" : "lead";
-  const draft = existing
-    ? {
-        patternId: existing.patternId,
-        octave: existing.octave,
-        key,
-        grid: existing.grid.map((c) => (c ? { ...c } : null)),
-        noteLength: 2,
-        macros: copyMacros(state.slots[role]?.macros),
-        macrosTouched: Array.isArray(state.slots[role]?.macros),
-        macroMeta: null,
-      }
-    : {
-        ...MidiEngine.createMidiState(midiRole, key),
-        noteLength: 2,
-        macros: copyMacros(state.slots[role]?.macros),
-        macrosTouched: Array.isArray(state.slots[role]?.macros),
-        macroMeta: null,
-      };
+  const midiRole = midiRoleForSlot(role);
+  const cloned = existing
+    ? cloneMidi(existing)
+    : MidiEngine.createMidiState(midiRole, sessionKey);
+  const draft = {
+    ...cloned,
+    key: cloned.key || sessionKey,
+    noteLength: 2,
+    macros: copyMacros(state.slots[role]?.macros),
+    macrosTouched: Array.isArray(state.slots[role]?.macros),
+    macroMeta: null,
+  };
 
   const root = buildMidiEditorElement(role);
   const host = $("#midi-editors");
   host?.appendChild(root);
-  midiEditors[role] = { role, draft, root };
+  midiEditors[role] = { role, draft, root, barIndex: 0 };
   bindMidiEditorRoot(role, root);
   renderMidiEditor(role);
   syncMidiEditingClasses();
@@ -3575,6 +4506,12 @@ async function loadMacrosForEditor(role) {
   }
 }
 
+function isGenericMacroLabel(name) {
+  const n = String(name || "").trim();
+  if (!n) return true;
+  return /^macro\s*[1-8]$/i.test(n);
+}
+
 /** If error detail embeds a successful macros JSON blob, parse it. */
 function tryParseMacrosFromError(err) {
   const msg = String(err?.message || err || "");
@@ -3598,13 +4535,16 @@ function applyMacroResult(role, result) {
   const status = $(".midi-macros-status", ed.root);
   const mapped = Array.isArray(result.macros) ? result.macros : [];
   const all = Array.isArray(result.all_macros) ? result.all_macros : mapped;
+  const named = (mapped.length ? mapped : all).filter(
+    (m) => !isGenericMacroLabel(m?.name)
+  );
   const nSlots = Math.max(4, all.length, mapped.length, 8);
   const baseline = Array.from({ length: nSlots }, () => 0);
   for (const m of all) {
     const slot = Number(m.slot) || 0;
     if (slot >= 1 && slot <= nSlots) baseline[slot - 1] = max01(m.value ?? 0);
   }
-  ed.draft.macroMeta = mapped.map((m) => ({
+  ed.draft.macroMeta = named.map((m) => ({
     slot: Number(m.slot) || 1,
     name: m.name || `Macro ${m.slot}`,
     value: max01(m.value ?? 0),
@@ -3620,16 +4560,16 @@ function applyMacroResult(role, result) {
     }
   }
   wrap?.classList.remove("is-loading");
-  if (!mapped.length) {
+  if (!named.length) {
     wrap?.classList.add("is-empty");
-    if (status) status.textContent = "No macros mapped on this preset";
+    if (status) status.textContent = "No named macros on this preset";
   } else {
     wrap?.classList.remove("is-empty");
     if (status) {
       const loaded = result.fxp_loaded ? "preset loaded" : "preset load uncertain";
       status.textContent = ed.draft.macrosTouched
-        ? `${mapped.length} macro${mapped.length === 1 ? "" : "s"} · custom · ${loaded}`
-        : `${mapped.length} macro${mapped.length === 1 ? "" : "s"} · ${loaded}`;
+        ? `${named.length} macro${named.length === 1 ? "" : "s"} · custom · ${loaded}`
+        : `${named.length} macro${named.length === 1 ? "" : "s"} · ${loaded}`;
     }
   }
   renderMacroSliders(role);
@@ -3716,21 +4656,52 @@ function renderMidiEditor(role) {
   const ed = midiEditors[role];
   if (!ed || !window.MidiEngine) return;
   const { draft, root } = ed;
-  const key = $("#key")?.value || "F minor";
-  draft.key = key;
+  const src = draft.source;
+  if (src !== "progression" && src !== "user") {
+    draft.key = state.slots[role]?.midi?.key || $("#key")?.value || draft.key || "F minor";
+  }
+  const key = draft.key || slotMidiKey(role);
   if (draft.noteLength == null) draft.noteLength = 2;
-  const midiRole = baseType(role) === "bass" ? "bass" : "lead";
+  const midiRole = midiRoleForSlot(role);
+  const hr = harmonyRole(baseType(role));
+  const is64 = Array.isArray(draft.grid) && draft.grid.length === 64;
+  const loopBars = getLoopBars();
+  if (is64 && (ed.barIndex == null || ed.barIndex < 0 || ed.barIndex >= loopBars)) {
+    ed.barIndex = 0;
+  }
+  const barIndex = is64 ? ed.barIndex || 0 : 0;
+  const offset = is64 ? barIndex * 16 : 0;
+  const barsLabel = loopBars === 1 ? "1 bar" : `${loopBars} bars`;
 
   const title = $(".midi-title", root);
   const sub = $(".midi-subtitle", root);
   if (title) title.textContent = `MIDI · ${role}`;
-  if (sub) sub.textContent = `Single-note · ${key} · type ${baseType(role)}`;
+  if (sub) {
+    sub.textContent =
+      hr === "pad"
+        ? `Voicing · ${barsLabel} · ${key}`
+        : `Single-note · ${barsLabel} · ${key}`;
+  }
 
   const keyDisp = $(".midi-key-display", root);
   if (keyDisp) keyDisp.value = key;
 
   const oct = $(".midi-octave", root);
   if (oct) oct.value = String(draft.octave ?? MidiEngine.defaultOctave(midiRole));
+
+  const shapeRow = $(".midi-shape", root);
+  if (shapeRow) shapeRow.hidden = hr === "pad";
+  const shape = midiShapeFrom(draft);
+  const setShape = (sel, outSel, val) => {
+    const input = $(sel, root);
+    const out = $(outSel, root);
+    const pct = String(Math.round(val * 100));
+    if (input) input.value = pct;
+    if (out) out.textContent = pct;
+  };
+  setShape(".midi-density", ".midi-density-out", shape.density);
+  setShape(".midi-variance", ".midi-variance-out", shape.variance);
+  setShape(".midi-hold", ".midi-length-out", shape.length);
 
   const sel = $(".midi-pattern", root);
   if (sel && !sel.dataset.ready) {
@@ -3758,6 +4729,28 @@ function renderMidiEditor(role) {
   }
   if (lenSel) lenSel.value = String(draft.noteLength || 2);
 
+  const pager = $(".midi-bar-pager", root);
+  if (pager) {
+    pager.hidden = !is64 || loopBars < 2;
+    pager.querySelectorAll(".midi-bar-btn").forEach((btn) => {
+      const b = Number(btn.dataset.bar) || 0;
+      const ch = state.progression?.chords?.[b];
+      const roman = ch?.roman || "—";
+      btn.hidden = b >= loopBars;
+      btn.textContent = `Bar ${b + 1}: ${roman}`;
+      btn.classList.toggle("on", is64 && b === barIndex && b < loopBars);
+      btn.classList.toggle("muted", ch?.enabled === false);
+    });
+  }
+
+  const help = $(".midi-help", root);
+  if (help) {
+    help.textContent =
+      hr === "pad"
+        ? "Click cycles inversion · Shift+click cycles the top degree · drag the right edge to change length."
+        : "Click empty to place · click note to remove · Shift+click cycles degree (1–7). Drag the right edge of a note (or Alt+drag) to change length · monophonic.";
+  }
+
   const labels = $(".midi-step-labels", root);
   if (labels) {
     labels.innerHTML = "";
@@ -3772,21 +4765,28 @@ function renderMidiEditor(role) {
   const gridEl = $(".midi-grid", root);
   if (gridEl) {
     gridEl.innerHTML = "";
+    const gridLen = draft.grid?.length || 16;
     const owner = Array(16).fill(null);
-    for (let s = 0; s < 16; s++) {
+    for (let s = 0; s < gridLen; s++) {
       const cell = draft.grid[s];
       if (!cell) continue;
-      const len = MidiEngine.clampLength(s, cell.length || 1, 16);
-      for (let i = 0; i < len && s + i < 16; i++) owner[s + i] = s;
+      const len = MidiEngine.clampLength(s, cell.length || 1, gridLen);
+      for (let i = 0; i < 16; i++) {
+        const g = offset + i;
+        if (s <= g && s + len > g) owner[i] = s;
+      }
     }
     for (let i = 0; i < 16; i++) {
+      const global = offset + i;
       const start = owner[i];
-      const isStart = start === i;
+      const isStart = start === global;
       const isSustain = start != null && !isStart;
-      const cell = isStart ? draft.grid[i] : null;
       const note = start != null ? draft.grid[start] : null;
-      const noteLen = note ? MidiEngine.clampLength(start, note.length || 1, 16) : 0;
-      const isEnd = start != null && i === start + noteLen - 1;
+      const noteLen = note
+        ? MidiEngine.clampLength(start, note.length || 1, gridLen)
+        : 0;
+      const isEnd = start != null && global === start + noteLen - 1;
+      const hasVoices = Boolean(note && Array.isArray(note.voices) && note.voices.length);
 
       const btn = document.createElement("button");
       btn.type = "button";
@@ -3795,27 +4795,59 @@ function renderMidiEditor(role) {
         (isStart ? " on" : "") +
         (isSustain ? " sustain" : "") +
         (isEnd ? " note-end" : "") +
-        (i % 4 === 0 ? " beat" : "");
-      btn.dataset.step = String(i);
+        (i % 4 === 0 ? " beat" : "") +
+        (isStart && (hasVoices || hr === "pad") ? " voices" : "");
+      btn.dataset.step = String(global);
       if (start != null) btn.dataset.noteStart = String(start);
 
       if (isStart && note) {
-        const midi = MidiEngine.degreeToMidi(key, note.degree, draft.octave);
-        btn.textContent = MidiEngine.midiToName(midi);
-        btn.title = `deg ${note.degree + 1} · ${MidiEngine.midiToName(midi)} · ${lengthLabel(noteLen)} — drag right edge to resize`;
+        const voices = MidiEngine.cellVoices(note);
+        const names = voices.map((v) =>
+          MidiEngine.midiToName(
+            MidiEngine.degreeToMidi(
+              key,
+              v.degree ?? note.degree,
+              v.oct ?? note.oct ?? draft.octave,
+              v.alter ?? note.alter ?? 0
+            )
+          )
+        );
+        if (hasVoices || hr === "pad") {
+          btn.textContent = "";
+          for (const name of names) {
+            const span = document.createElement("span");
+            span.className = "midi-voice-name";
+            span.textContent = name;
+            btn.appendChild(span);
+          }
+          btn.title = `${names.join("·")} · ${lengthLabel(noteLen)} — click cycles inversion`;
+        } else {
+          btn.textContent = names[0] || MidiEngine.midiToName(
+            MidiEngine.degreeToMidi(
+              key,
+              note.degree,
+              note.oct ?? draft.octave,
+              note.alter || 0
+            )
+          );
+          btn.title = `deg ${note.degree + 1} · ${btn.textContent} · ${lengthLabel(noteLen)} — drag right edge to resize`;
+        }
       } else if (isSustain && note) {
         btn.textContent = "—";
         btn.title = `Sustain · ${lengthLabel(noteLen)} — drag right edge to resize`;
       } else {
         btn.textContent = "·";
-        btn.title = `Empty · click places ${lengthLabel(draft.noteLength || 2)}`;
+        btn.title =
+          hr === "pad"
+            ? "Empty · click places this bar's voicing when a theme exists"
+            : `Empty · click places ${lengthLabel(draft.noteLength || 2)}`;
       }
 
       btn.addEventListener("pointerdown", (ev) => {
-        onMidiCellPointerDown(role, i, ev);
+        onMidiCellPointerDown(role, global, ev);
       });
       btn.addEventListener("pointermove", (ev) => {
-        updateMidiResizeCursor(btn, role, i, ev);
+        updateMidiResizeCursor(btn, role, global, ev);
       });
       btn.addEventListener("pointerleave", () => {
         btn.classList.remove("resize-edge");
@@ -3824,16 +4856,6 @@ function renderMidiEditor(role) {
     }
   }
 
-  const notes = MidiEngine.gridToNotes(draft.grid, key, draft.octave, 1);
-  const list = $(".midi-note-list", root);
-  if (list) {
-    if (!notes.length) list.textContent = "(empty bar)";
-    else {
-      list.textContent = notes
-        .map((n) => `${n.step + 1}:${MidiEngine.midiToName(n.midi)}×${n.duration}`)
-        .join("  ");
-    }
-  }
 }
 
 /** True when pointer is on the right ~40% of a note's last cell (resize handle). */
@@ -3893,13 +4915,20 @@ function onMidiCellPointerDown(role, step, ev) {
   const grid = ed.draft.grid;
   const hit = MidiEngine.findNoteAt(grid, step);
   const btn = ev.currentTarget;
+  const key = ed.draft.key || slotMidiKey(role);
+  const padLike = isPadOrVoicesEditor(role, hit?.cell);
 
-  // Shift+click on note: cycle scale degree
+  // Shift+click on note: cycle scale degree (top voice on pads)
   if (ev.shiftKey && hit) {
     ev.preventDefault();
     const cell = grid[hit.start];
-    cell.degree = (cell.degree + 1) % 7;
-    markMidiCustom(role);
+    if (padLike && Array.isArray(cell.voices) && cell.voices.length) {
+      const top = cell.voices[cell.voices.length - 1];
+      top.degree = ((top.degree ?? 0) + 1) % 7;
+    } else {
+      cell.degree = (cell.degree + 1) % 7;
+    }
+    markMidiUser(role);
     renderMidiEditor(role);
     commitMidiDraft(role);
     return;
@@ -3914,12 +4943,36 @@ function onMidiCellPointerDown(role, step, ev) {
       startMidiResize(role, hit.start, ev);
       return;
     }
+    if (padLike) {
+      ev.preventDefault();
+      MidiEngine.invertCellVoices(grid[hit.start], ed.draft.octave, key);
+      markMidiUser(role);
+      renderMidiEditor(role);
+      commitMidiDraft(role);
+      return;
+    }
     // Click body/start removes the whole note
     ev.preventDefault();
     grid[hit.start] = null;
-    markMidiCustom(role);
+    markMidiUser(role);
     renderMidiEditor(role);
     commitMidiDraft(role);
+    return;
+  }
+
+  // Empty pad / voices cell: never place() — seed bar voicing if a theme exists
+  if (isPadOrVoicesEditor(role, null)) {
+    ev.preventDefault();
+    const bar = Math.floor(step / 16);
+    const voices = voicesFromProgressionBar(bar, ed.draft.octave, key);
+    if (voices && voices.length) {
+      const start = bar * 16;
+      MidiEngine.placeVoices(grid, start, voices, 16, 90);
+      if (state.progression?.key) ed.draft.key = state.progression.key;
+      markMidiUser(role);
+      renderMidiEditor(role);
+      commitMidiDraft(role);
+    }
     return;
   }
 
@@ -3927,7 +4980,7 @@ function onMidiCellPointerDown(role, step, ev) {
   ev.preventDefault();
   const len = Math.max(1, Math.min(16, Number(ed.draft.noteLength) || 2));
   MidiEngine.place(grid, step, 0, len, 100);
-  markMidiCustom(role);
+  markMidiUser(role);
   renderMidiEditor(role);
   commitMidiDraft(role);
 }
@@ -3951,12 +5004,12 @@ function startMidiResize(role, noteStart, ev) {
     if (!midiEditors[role]) return;
     const grid = ed.draft.grid;
     if (!grid[noteStart]) return;
-    const endStep = stepFromClientX(gridEl, clientX);
+    const endStep = stepFromClientX(gridEl, clientX) + editorStepOffset(role);
     const newLen = Math.max(1, endStep - noteStart + 1);
     const cur = grid[noteStart].length || 1;
     if (cur === newLen) return;
     MidiEngine.setNoteLength(grid, noteStart, newLen);
-    markMidiCustom(role);
+    markMidiUser(role);
     // Keep resize flag through re-render (DOM rebuild)
     ed._resizing = true;
     renderMidiEditor(role);
@@ -3988,19 +5041,13 @@ function commitMidiDraft(role, opts = {}) {
   const ed = midiEditors[role];
   if (!ed || !window.MidiEngine) return;
   const { draft } = ed;
-  const key = $("#key")?.value || "F minor";
-  draft.key = key;
   const octEl = midiQ(role, ".midi-octave");
   draft.octave = Number(octEl?.value ?? draft.octave);
+  const key = draft.key || slotMidiKey(role);
   // Snapshot before write (coalesced for rapid edits)
   pushMidiUndo(role);
   if (!state.slots[role]) state.slots[role] = {};
-  state.slots[role].midi = {
-    patternId: draft.patternId,
-    octave: draft.octave,
-    key,
-    grid: draft.grid.map((c) => (c ? { ...c } : null)),
-  };
+  state.slots[role].midi = cloneMidi(draft);
   if (draft.macrosTouched && Array.isArray(draft.macros)) {
     state.slots[role].macros = draft.macros.slice(0, 8).map(max01);
   }
@@ -4025,30 +5072,56 @@ function commitMidiDraft(role, opts = {}) {
 }
 
 function initMidiEditorUi() {
-  $("#key")?.addEventListener("change", () => {
-    rekeyAllMidi();
-    for (const role of Object.keys(midiEditors)) {
-      renderMidiEditor(role);
-    }
-    // Lead/bass samples tagged with a key retune to the new session root
-    if (isPlaying) retuneWarpedSources();
+  const keyEl = $("#key");
+  keyEl?.addEventListener("focus", () => {
+    rememberSessionKey(keyEl.value);
+  });
+  keyEl?.addEventListener("change", () => {
+    Promise.resolve(rekeyAllMidi())
+      .catch((e) => setStatus(`Theme apply failed: ${e.message}`))
+      .finally(() => {
+        rememberSessionKey(keyEl.value);
+        for (const role of Object.keys(midiEditors)) {
+          renderMidiEditor(role);
+        }
+        // Lead/bass samples tagged with a key retune to the new session root
+        if (isPlaying) retuneWarpedSources();
+      });
   });
 }
 
 function syncLockUi(role) {
   const slot = ensureSlotEl(role);
   if (!slot) return;
-  const locked = Boolean(state.slots[role]?.locked);
-  const lockBtn = $(".icon-btn.lock", slot);
+  const locked = isTrackLocked(role);
+  const presetLocked = Boolean(state.slots[role]?.presetLocked);
+  const lockBtn = $(".slot-actions .icon-btn.lock", slot);
   slot.classList.toggle("locked", locked);
-  if (!lockBtn) return;
-  lockBtn.classList.toggle("on", locked);
-  lockBtn.setAttribute("aria-pressed", String(locked));
-  lockBtn.textContent = locked ? "🔒" : "🔓";
-  lockBtn.setAttribute("aria-label", locked ? "Unlock" : "Lock");
-  lockBtn.dataset.tip = locked
-    ? "Unlock — allow Reroll to change this track"
-    : "Lock — keep this sound on Reroll";
+  slot.classList.toggle("preset-locked", presetLocked && !locked);
+  if (lockBtn) {
+    lockBtn.classList.toggle("on", locked);
+    lockBtn.setAttribute("aria-pressed", String(locked));
+    lockBtn.textContent = locked ? "🔒" : "🔓";
+    lockBtn.setAttribute("aria-label", locked ? "Unlock" : "Lock");
+    lockBtn.dataset.tip = locked
+      ? "Unlock — allow Reroll to change preset and MIDI"
+      : "Lock — keep preset and MIDI on Reroll";
+  }
+  const presetBtn = $(".icon-btn.preset-lock", slot);
+  if (presetBtn) {
+    const presetOn = locked || presetLocked;
+    presetBtn.classList.toggle("on", presetOn);
+    presetBtn.setAttribute("aria-pressed", String(presetOn));
+    presetBtn.textContent = presetOn ? "🔒" : "🔓";
+    presetBtn.setAttribute("aria-label", presetOn ? "Unlock preset" : "Lock preset");
+    if (locked) {
+      presetBtn.dataset.tip = "Track locked — preset and MIDI stay";
+    } else if (presetLocked) {
+      presetBtn.dataset.tip = "Unlock preset — Reroll may change the sound";
+    } else {
+      presetBtn.dataset.tip = "Lock preset — Reroll may still change MIDI";
+    }
+  }
 }
 
 function toggleLock(role, _btn) {
@@ -4060,7 +5133,25 @@ function toggleLock(role, _btn) {
   const locked = !cur.locked;
   state.slots[role] = { ...cur, locked };
   syncLockUi(role);
-  setStatus(locked ? `Locked ${role}` : `Unlocked ${role}`);
+  setStatus(locked ? `Locked ${role} · preset and MIDI` : `Unlocked ${role}`);
+}
+
+function togglePresetLock(role) {
+  const cur = state.slots[role];
+  if (!cur) return;
+  if (cur.locked) {
+    setStatus("Track locked — unlock the track lock to change preset lock");
+    return;
+  }
+  pushUndo(cur.presetLocked ? `Unlock preset · ${role}` : `Lock preset · ${role}`);
+  const presetLocked = !cur.presetLocked;
+  state.slots[role] = { ...cur, presetLocked };
+  syncLockUi(role);
+  setStatus(
+    presetLocked
+      ? `Preset locked · ${role} — MIDI can still change`
+      : `Preset unlocked · ${role}`
+  );
 }
 
 function serumTypeOptionsHtml(selected) {
@@ -4103,21 +5194,28 @@ function buildSlotElement(id, type) {
 
   const toolsHtml = serum
     ? `<div class="slot-serum-tools">
-        <button type="button" class="icon-btn serum-m" data-tip="Edit MIDI pattern" aria-label="MIDI editor">M</button>
+        <button type="button" class="icon-btn serum-m" data-tip="Edit MIDI pattern · or double-click the track" aria-label="MIDI editor">M</button>
       </div>`
     : "";
 
   art.innerHTML = `
     ${roleHtml}
-    <div class="slot-body">
-      <div class="slot-name">${serum ? `Serum · ${type}` : "— empty —"}</div>
+    <div class="slot-body"${serum ? ' data-tip="Double-click to open / close MIDI"' : ""}>
+      <div class="slot-name-row">
+        <div class="slot-name">${serum ? `Serum · ${type}` : "— empty —"}</div>
+        ${
+          serum
+            ? `<button type="button" class="icon-btn preset-lock" data-tip="Lock preset — Reroll may still change MIDI" aria-pressed="false" aria-label="Lock preset">🔓</button>`
+            : ""
+        }
+      </div>
       <div class="slot-meta">${serum ? "preset · MIDI will follow key" : "optional · pick with Reroll"}</div>
     </div>
     ${toolsHtml}
     <div class="slot-actions">
       <button type="button" class="icon-btn mute" data-tip="Mute / unmute" aria-pressed="false" aria-label="Mute">🔊</button>
       <button type="button" class="icon-btn solo" data-tip="Solo this track" aria-pressed="false" aria-label="Solo">S</button>
-      <button type="button" class="icon-btn lock" data-tip="Lock — keep on Reroll" aria-pressed="false" aria-label="Lock">🔓</button>
+      <button type="button" class="icon-btn lock" data-tip="Lock — keep preset and MIDI on Reroll" aria-pressed="false" aria-label="Lock">🔓</button>
       <button type="button" class="icon-btn delete" data-tip="Remove track from stack" aria-label="Delete track">🗑️</button>
       <button type="button" class="icon-btn dice" data-tip="Reroll this track" aria-label="Reroll">🎲</button>
     </div>
@@ -4128,7 +5226,8 @@ function buildSlotElement(id, type) {
 function bindSlotElement(art) {
   const role = art.dataset.role;
   const type = art.dataset.type || baseType(role);
-  const lock = $(".icon-btn.lock", art);
+  const lock = $(".slot-actions .icon-btn.lock", art);
+  const presetLock = $(".icon-btn.preset-lock", art);
   const dice = $(".icon-btn.dice", art);
   const mute = $(".icon-btn.mute", art);
   const solo = $(".icon-btn.solo", art);
@@ -4137,13 +5236,33 @@ function bindSlotElement(art) {
   const typeSel = $(".slot-role-select", art);
 
   lock?.addEventListener("click", () => toggleLock(role, lock));
+  presetLock?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (e.detail > 1) return;
+    togglePresetLock(role);
+  });
   mute?.addEventListener("click", () => toggleMute(role));
   solo?.addEventListener("click", () => toggleSolo(role));
   dice?.addEventListener("click", () => {
     doReroll(role).catch((e) => setStatus(`Reroll failed: ${e.message}`));
   });
   del?.addEventListener("click", () => removeTrack(role));
-  serumM?.addEventListener("click", () => doNewMidi(role));
+  serumM?.addEventListener("click", (e) => {
+    // Second click of a double-click — don't open then immediately close.
+    if (e.detail > 1) return;
+    doNewMidi(role);
+  });
+  if (serumM) {
+    art.addEventListener("dblclick", (e) => {
+      if (e.target.closest("select, input, textarea, a, .slot-actions, .slot-role-wrap, .preset-lock")) {
+        return;
+      }
+      // M already toggled on the first click.
+      if (e.target.closest(".serum-m, .slot-serum-tools")) return;
+      e.preventDefault();
+      doNewMidi(role);
+    });
+  }
   typeSel?.addEventListener("change", () => {
     if (!state.slots[role]) state.slots[role] = {};
     pushUndo(`Type · ${role}`);
@@ -4152,6 +5271,7 @@ function bindSlotElement(art) {
     // Changing type filter also becomes the catalog type for dice
     state.slots[role].type = v === "any" ? type : v;
     art.dataset.type = state.slots[role].type;
+    renderThemePanel();
     setStatus(`${role} · type ${String(v).toUpperCase()}`);
   });
 
@@ -4162,6 +5282,7 @@ function bindSlotElement(art) {
       meta: $(".slot-meta", art)?.textContent || "",
       path: null,
       locked: false,
+      presetLocked: false,
       muted: false,
       solo: false,
       empty: type === "fx",
@@ -4199,6 +5320,7 @@ function addTrack(type, { silent = false } = {}) {
       : "pick with Reroll / dice",
     path: null,
     locked: false,
+    presetLocked: false,
     muted: false,
     solo: false,
     empty: true,
@@ -4210,9 +5332,13 @@ function addTrack(type, { silent = false } = {}) {
   list?.appendChild(art);
   bindSlotElement(art);
   if (isSerumTrack(id)) ensureSlotMidi(id);
+  renderThemePanel();
+  const themed = applyThemeToTrack(id);
   if (!silent) {
     setStatus(`Added ${t} track`);
-    doReroll(id).catch(() => {});
+    themed
+      .catch((e) => console.warn(`theme apply ${id}:`, e))
+      .finally(() => doReroll(id).catch(() => {}));
   }
   return id;
 }
@@ -4222,12 +5348,16 @@ function removeTrack(id) {
     setStatus("Keep at least one track");
     return;
   }
+  const wasSolo = Boolean(state.slots[id]?.solo);
   pushUndo("Delete track");
   if (midiEditors[id]) closeMidiEditor(id);
   if (previewLoopRole === id) stopAll();
+  else teardownPlayingTrack(id);
   state.trackOrder = state.trackOrder.filter((x) => x !== id);
   delete state.slots[id];
   $(`.slot[data-role="${id}"]`)?.remove();
+  if (wasSolo) applyAllTrackGains();
+  renderThemePanel();
   setStatus(`Removed track · Ctrl+Z to undo`);
 }
 
@@ -4240,6 +5370,11 @@ function initDefaultTracks() {
   state.trackOrder = [];
   state.slots = {};
   trackSeq = 0;
+  if (!isThemeLocked()) state.progression = null;
+  // New stack, not an overwrite of the previous themed save.
+  state.currentLoopId = null;
+  state.currentLoopName = null;
+  renderThemePanel();
   ensureInstrumentsState();
   const types = getDefaultTrackTypes();
   for (const t of types) {
@@ -4302,16 +5437,63 @@ function readInstrumentsFromDom() {
   }
 }
 
-/** Deep-ish clone of slot MIDI for save. */
+/** Deep clone of slot MIDI — full contract (bars/source/locked/alter/oct/voices). */
 function cloneMidi(midi) {
   if (!midi || typeof midi !== "object") return null;
   return {
     patternId: midi.patternId || "custom",
     octave: midi.octave ?? 3,
     key: midi.key || null,
+    bars: midi.bars === 4 || (Array.isArray(midi.grid) && midi.grid.length === 64) ? 4 : 1,
+    source: midi.source || "pattern",
+    locked: Boolean(midi.locked),
+    ...midiShapeFrom(midi),
     grid: Array.isArray(midi.grid)
-      ? midi.grid.map((c) => (c && typeof c === "object" ? { ...c } : null))
+      ? midi.grid.map((c) => {
+          if (!c || typeof c !== "object") return null;
+          const cell = {
+            degree: c.degree,
+            length: c.length,
+            vel: c.vel,
+          };
+          if (c.alter) cell.alter = c.alter;
+          if (c.oct != null) cell.oct = c.oct;
+          if (Array.isArray(c.voices) && c.voices.length) {
+            cell.voices = c.voices.map((v) => ({ ...v }));
+          }
+          return cell;
+        })
       : null,
+  };
+}
+
+function cloneProgression(prog) {
+  if (!prog || typeof prog !== "object") return null;
+  return {
+    version: prog.version ?? 1,
+    bars: prog.bars ?? 4,
+    key: prog.key || null,
+    recipe_id: prog.recipe_id || null,
+    label: prog.label || "",
+    locked: Boolean(prog.locked),
+    style_used: prog.style_used || "",
+    diced_at: prog.diced_at || null,
+    chords: Array.isArray(prog.chords)
+      ? prog.chords.map((c) => {
+          if (!c || typeof c !== "object") return null;
+          return {
+            bar: c.bar,
+            roman: c.roman,
+            root_degree: c.root_degree,
+            quality: c.quality,
+            root_pc: c.root_pc,
+            pcs: Array.isArray(c.pcs) ? c.pcs.slice() : [],
+            intervals: Array.isArray(c.intervals) ? c.intervals.slice() : [],
+            alters: c.alters && typeof c.alters === "object" ? { ...c.alters } : {},
+            enabled: c.enabled !== false,
+          };
+        })
+      : [],
   };
 }
 
@@ -4346,6 +5528,7 @@ function cloneSlotSnapshot(s) {
     ext: s.ext || null,
     empty: Boolean(s.empty),
     locked: Boolean(s.locked),
+    presetLocked: Boolean(s.presetLocked),
     muted: Boolean(s.muted),
     solo: Boolean(s.solo),
     serumType: s.serumType || null,
@@ -4365,8 +5548,10 @@ function captureDocSnapshot() {
     trackSeq,
     slots,
     bpm: getBpm(),
+    bars: getLoopBars(),
     key: $("#key")?.value || "F minor",
     style: ($("#style")?.value || "").trim(),
+    progression: cloneProgression(state.progression),
   };
 }
 
@@ -4404,6 +5589,8 @@ function restoreDocSnapshot(snap) {
   try {
     stopAll();
     closeAllMidiEditors();
+    state.progression = cloneProgression(snap.progression);
+    syncThemeLockFromProgression();
     const list = $("#slot-list");
     if (!list) return;
     list.innerHTML = "";
@@ -4414,8 +5601,10 @@ function restoreDocSnapshot(snap) {
     const keyEl = $("#key");
     const styleEl = $("#style");
     if (bpmEl && snap.bpm != null) bpmEl.value = String(snap.bpm);
+    if (snap.bars != null) applyLoopBars(snapLoopBars(snap.bars, 4));
     if (keyEl && snap.key) keyEl.value = snap.key;
-    if (styleEl && snap.style != null) styleEl.value = snap.style;
+    if (styleEl && snap.style != null) setStyleValue(snap.style);
+    rememberSessionKey(keyEl?.value || snap.key);
 
     trackSeq = Number(snap.trackSeq) || 0;
     const order = Array.isArray(snap.trackOrder) ? snap.trackOrder : [];
@@ -4435,6 +5624,7 @@ function restoreDocSnapshot(snap) {
         ext: raw.ext || null,
         empty: raw.empty != null ? Boolean(raw.empty) : !raw.path,
         locked: Boolean(raw.locked),
+        presetLocked: Boolean(raw.presetLocked || raw.preset_locked),
         muted: Boolean(raw.muted),
         solo: Boolean(raw.solo),
         serumType: raw.serumType || (isSerumType(type) ? type : "any"),
@@ -4467,6 +5657,7 @@ function restoreDocSnapshot(snap) {
     markWaveDirty();
     drawWaveformFrame();
   } finally {
+    renderThemePanel();
     undoSuspended = false;
   }
 }
@@ -4535,6 +5726,7 @@ function serializeLoop(name) {
       ext: s.ext || null,
       empty: Boolean(s.empty),
       locked: Boolean(s.locked),
+      presetLocked: Boolean(s.presetLocked),
       muted: Boolean(s.muted),
       solo: Boolean(s.solo),
       serumType: s.serumType || (isSerumTrack(id) ? baseType(id) : "any"),
@@ -4543,9 +5735,10 @@ function serializeLoop(name) {
     };
   }
   readSerumEngineOptionsFromDom();
-  return {
+  const payload = {
     name: String(name || "").trim(),
     bpm: getBpm(),
+    bars: getLoopBars(),
     key: $("#key")?.value || "F minor",
     style: ($("#style")?.value || "").trim(),
     options: {
@@ -4554,11 +5747,14 @@ function serializeLoop(name) {
       serum1: state.options.serum1 !== false,
       serum2: state.options.serum2 !== false,
       instruments: { ...(state.options.instruments || defaultInstrumentsMap()) },
+      loopBars: getLoopBars(),
     },
     track_order: [...activeTrackIds()],
     slots,
-    id: state.currentLoopId || null,
   };
+  const prog = cloneProgression(state.progression);
+  if (prog) payload.progression = prog;
+  return payload;
 }
 
 function defaultLoopName() {
@@ -4610,6 +5806,8 @@ function applyLoadedLoop(doc) {
   const list = $("#slot-list");
   if (!list) return;
   pushUndo("Load loop");
+  state.progression = null;
+  state.themeLocked = false;
   stopAll();
   closeAllMidiEditors();
   bufferCache.clear();
@@ -4623,8 +5821,11 @@ function applyLoadedLoop(doc) {
   const keyEl = $("#key");
   const styleEl = $("#style");
   if (bpmEl && doc.bpm != null) bpmEl.value = String(doc.bpm);
+  const loadedBars = doc.bars ?? doc.options?.loopBars;
+  applyLoopBars(loadedBars == null ? 4 : snapLoopBars(loadedBars, 4));
   if (keyEl && doc.key) keyEl.value = doc.key;
-  if (styleEl && doc.style != null) styleEl.value = doc.style;
+  if (styleEl && doc.style != null) setStyleValue(doc.style);
+  rememberSessionKey(keyEl?.value || doc.key);
 
   const filterOn = Boolean(doc.options?.filterRisers);
   state.options.filterRisers = filterOn;
@@ -4680,6 +5881,7 @@ function applyLoadedLoop(doc) {
       ext: raw.ext || null,
       empty: raw.empty != null ? Boolean(raw.empty) : !raw.path,
       locked: Boolean(raw.locked),
+      presetLocked: Boolean(raw.presetLocked || raw.preset_locked),
       muted: Boolean(raw.muted),
       solo: Boolean(raw.solo),
       serumType: raw.serumType || (isSerumType(type) ? type : "any"),
@@ -4709,12 +5911,15 @@ function applyLoadedLoop(doc) {
     syncSoloUi(id);
   }
 
-  state.currentLoopId = doc.id || null;
-  state.currentLoopName = doc.name || null;
-
   if (!order.length) {
     initDefaultTracks();
   }
+  // After tracks (initDefaultTracks clears theme + loop id). Missing key → — no theme —.
+  state.currentLoopId = doc.id || null;
+  state.currentLoopName = doc.name || null;
+  state.progression = cloneProgression(doc.progression);
+  syncThemeLockFromProgression();
+  renderThemePanel();
 }
 
 function formatSavedAt(iso) {
@@ -4751,6 +5956,7 @@ async function refreshLoopsList() {
       item.key || null,
       item.style || null,
       item.track_count != null ? `${item.track_count} trk` : null,
+      item.has_progression ? "theme" : null,
       formatSavedAt(item.saved_at),
     ]
       .filter(Boolean)
@@ -4818,6 +6024,11 @@ function initUiChrome() {
   if (bpmInput) {
     bpmInput.addEventListener("input", onBpmInput);
     bpmInput.addEventListener("change", onBpmInput);
+  }
+  const barsInput = $("#bars");
+  if (barsInput) {
+    barsInput.addEventListener("input", onBarsInput);
+    barsInput.addEventListener("change", onBarsInput);
   }
 
   ensureInstrumentsState();
@@ -4888,9 +6099,9 @@ function initUiChrome() {
 
   // Session fields also persist as user settings
   $("#bpm")?.addEventListener("change", () => scheduleSaveUserSettings());
+  $("#bars")?.addEventListener("change", () => scheduleSaveUserSettings());
   $("#key")?.addEventListener("change", () => scheduleSaveUserSettings({ immediate: true }));
-  $("#style")?.addEventListener("change", () => scheduleSaveUserSettings());
-  $("#style")?.addEventListener("blur", () => scheduleSaveUserSettings({ immediate: true }));
+  $("#style")?.addEventListener("change", () => scheduleSaveUserSettings({ immediate: true }));
 
   $("#btn-add-track")?.addEventListener("click", () => {
     const type = $("#add-track-type")?.value || "bass";
@@ -5323,12 +6534,7 @@ async function doExportLoop() {
       kind: s.kind || null,
     };
     if (s.midi?.grid) {
-      out.midi = {
-        patternId: s.midi.patternId,
-        octave: s.midi.octave ?? 3,
-        key: s.midi.key || $("#key")?.value || "F minor",
-        grid: s.midi.grid.map((c) => (c ? { ...c } : null)),
-      };
+      out.midi = cloneMidi(s.midi);
     }
     if (Array.isArray(s.macros) && s.macros.length) {
       out.macros = s.macros.slice(0, 8).map(max01);
@@ -5353,7 +6559,7 @@ async function doExportLoop() {
           bpm,
           key,
           style,
-          bars: typeof LOOP_BARS === "number" ? LOOP_BARS : 4,
+          bars: getLoopBars(),
           tracks,
           open_folder: false,
           write_als: writeAls,
@@ -5595,9 +6801,11 @@ function bindExportDragAll() {
 
 async function init() {
   initUiChrome();
+  initThemePanel();
   initMidiEditorUi();
   initWaveOverview();
   initBottomTips();
+  bindStylePickerOpen();
 
   if (isFileProtocol()) {
     setStatus(
@@ -5615,7 +6823,10 @@ async function init() {
       ensureInstrumentsState();
     }
     initDefaultTracks();
+    rememberSessionKey();
     await loadLibrary();
+    applyLoopBars(getLoopBars());
+    renderThemePanel();
     // Initial fill only — don't autoplay (needs user gesture for AudioContext)
     await doGenerate({ autoPlay: false });
   } catch (e) {

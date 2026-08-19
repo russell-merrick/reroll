@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Reroll — By Austin Russell</title>
-  <link rel="stylesheet" href="styles.css" />
+  <title>reroll</title>
+  <link rel="stylesheet" href="styles.css?v=bars-1" />
 </head>
 <body>
   <div class="app">
@@ -23,7 +23,7 @@
           </svg>
         </a>
         <div>
-          <h1>Reroll</h1>
+          <h1>reroll</h1>
           <p class="tagline">By Austin Russell · Your collection, infinite ideas</p>
         </div>
       </div>
@@ -51,14 +51,38 @@
           <option>G major</option>
         </select>
       </label>
-      <label class="field grow">
+      <label class="field grow" id="style-field">
         <span>Style</span>
-        <input type="text" id="style" value="No preference" list="style-presets" placeholder="No preference = random · or pick from your library…" />
-        <datalist id="style-presets">
-          <option value="No preference" />
-        </datalist>
+        <select id="style">
+          <option>No preference</option>
+          <option>Melodic techno</option>
+          <option>Prog house</option>
+          <option>Trance</option>
+          <option selected>Techno</option>
+          <option>Peak-time techno</option>
+          <option>House</option>
+        </select>
       </label>
-      <button type="button" class="btn primary big" id="btn-generate" data-tip="Reroll unlocked tracks from your library (samples + Serum)">🎲 Reroll</button>
+      <label class="field">
+        <span>Bars</span>
+        <input type="number" id="bars" value="1" min="1" max="4" step="1" />
+      </label>
+      <div class="field theme-inline" id="theme-panel">
+        <span>Chords</span>
+        <div class="theme-inline-row">
+          <div class="theme-romans" id="theme-romans" aria-label="Progression">
+            <span class="theme-roman empty">—</span>
+          </div>
+          <button
+            type="button"
+            class="icon-btn lock"
+            id="btn-theme-lock"
+            aria-pressed="false"
+            data-tip="Lock chords — Reroll keeps this progression"
+          >🔓</button>
+        </div>
+      </div>
+      <button type="button" class="btn primary big" id="btn-generate" data-tip="Reroll sounds, chords, and bass (unlocked tracks / unlocked theme)">🎲 Reroll</button>
     </section>
 
     <!-- Full-width loop waveform + playhead (above Loop) -->
@@ -99,28 +123,30 @@
           <div class="options-instruments" id="opt-instruments" role="group" aria-label="Default instruments"></div>
         </div>
         <div class="options-group">
-          <div class="options-group-title" data-tip="Which engines Reroll / dice can pull presets from (global for all Serum tracks)">Serum library</div>
-          <label class="options-row" data-tip="Include Serum 1 (.fxp) presets when generating or dicing synth tracks">
-            <input type="checkbox" id="opt-serum1" checked />
-            <span class="options-label"><strong>Serum 1</strong></span>
-          </label>
-          <label class="options-row" data-tip="Include Serum 2 (.SerumPreset) presets when generating or dicing synth tracks">
-            <input type="checkbox" id="opt-serum2" checked />
-            <span class="options-label"><strong>Serum 2</strong></span>
-          </label>
-          <label class="options-row" data-tip="Skip stock banks (Serum 1 factory categories, Serum 2 Factory + S1 Presets). Only Splice and User presets remain.">
-            <input type="checkbox" id="opt-filter-factory-serum" />
-            <span class="options-label"><strong>Filter out factory presets</strong></span>
-          </label>
+          <div class="options-group-title" data-tip="Serum engines, sample filters, and extras">Misc options</div>
+          <div class="options-misc" role="group" aria-label="Misc options">
+            <label class="options-row" data-tip="Include Serum 1 (.fxp) presets when generating or dicing synth tracks">
+              <input type="checkbox" id="opt-serum1" checked />
+              <span class="options-label"><strong>Serum 1</strong></span>
+            </label>
+            <label class="options-row" data-tip="Include Serum 2 (.SerumPreset) presets when generating or dicing synth tracks">
+              <input type="checkbox" id="opt-serum2" checked />
+              <span class="options-label"><strong>Serum 2</strong></span>
+            </label>
+            <label class="options-row" data-tip="Skip stock banks (Serum 1 factory categories, Serum 2 Factory + S1 Presets). Only Splice and User presets remain.">
+              <input type="checkbox" id="opt-filter-factory-serum" />
+              <span class="options-label"><strong>Filter out factory presets</strong></span>
+            </label>
+            <label class="options-row" data-tip="Skip risers, builds/buildups, downlifters, uplifters, drum/snare rolls, sweeps, whooshes">
+              <input type="checkbox" id="opt-filter-risers" checked />
+              <span class="options-label"><strong>Filter out risers/builds</strong></span>
+            </label>
+            <label class="options-row" data-tip="Show Sierra, cats, unicorn, and barrel of monkeys buttons">
+              <input type="checkbox" id="opt-kid-time" />
+              <span class="options-label"><strong>Kid time</strong></span>
+            </label>
+          </div>
         </div>
-        <label class="options-row" data-tip="Skip risers, builds/buildups, downlifters, uplifters, drum/snare rolls, sweeps, whooshes">
-          <input type="checkbox" id="opt-filter-risers" checked />
-          <span class="options-label"><strong>Filter out risers/builds</strong></span>
-        </label>
-        <label class="options-row" data-tip="Show Sierra, cats, unicorn, and barrel of monkeys buttons">
-          <input type="checkbox" id="opt-kid-time" />
-          <span class="options-label"><strong>Kid time</strong></span>
-        </label>
         <div class="options-group">
           <div class="options-group-title" data-tip="Visual look of the app">Appearance</div>
           <div class="options-theme-row" data-tip="Color theme for the whole UI">
@@ -139,39 +165,38 @@
       <section class="slots" aria-label="Loop slots">
         <div class="section-head">
           <h2>Loop</h2>
+          <div class="add-track-row">
+            <select id="add-track-type" class="add-track-type" aria-label="New track type" data-tip="Type for the new track">
+              <option value="kick">Kick</option>
+              <option value="clap">Clap</option>
+              <option value="hats">Hats</option>
+              <option value="perc">Perc</option>
+              <option value="fx">FX</option>
+              <option value="vocal">Vocals</option>
+              <option value="lead_audio">Lead (audio)</option>
+              <option value="bass_audio">Bass (audio)</option>
+              <option value="bass" selected>Bass (Serum)</option>
+              <option value="lead">Lead (Serum)</option>
+              <option value="brass">Brass (Serum)</option>
+              <option value="chorus">Chorus (Serum)</option>
+              <option value="pad">Pad (Serum)</option>
+              <option value="guitar">Guitar (Serum)</option>
+              <option value="keys">Keys (Serum)</option>
+              <option value="strings">Strings (Serum)</option>
+              <option value="arp">Arp (Serum)</option>
+              <option value="pluck">Pluck (Serum)</option>
+              <option value="seq">Seq (Serum)</option>
+              <option value="synth">Synth (Serum)</option>
+              <option value="hoover">Hoover (Serum)</option>
+            </select>
+            <button type="button" class="btn add-track-btn" id="btn-add-track" aria-label="Add track" data-tip="Add a track to the stack">
+              <span class="add-track-plus" aria-hidden="true">+</span>
+            </button>
+          </div>
         </div>
 
         <div class="slot-list" id="slot-list">
           <!-- tracks built by app.js -->
-        </div>
-        <div class="add-track-row">
-          <button type="button" class="btn add-track-btn" id="btn-add-track" data-tip="Add a track to the stack">
-            <span class="add-track-plus" aria-hidden="true">+</span>
-            <span>Add track</span>
-          </button>
-          <select id="add-track-type" class="add-track-type" aria-label="New track type" data-tip="Type for the new track">
-            <option value="kick">Kick</option>
-            <option value="clap">Clap</option>
-            <option value="hats">Hats</option>
-            <option value="perc">Perc</option>
-            <option value="fx">FX</option>
-            <option value="vocal">Vocals</option>
-            <option value="lead_audio">Lead (audio)</option>
-            <option value="bass_audio">Bass (audio)</option>
-            <option value="bass" selected>Bass (Serum)</option>
-            <option value="lead">Lead (Serum)</option>
-            <option value="brass">Brass (Serum)</option>
-            <option value="chorus">Chorus (Serum)</option>
-            <option value="pad">Pad (Serum)</option>
-            <option value="guitar">Guitar (Serum)</option>
-            <option value="keys">Keys (Serum)</option>
-            <option value="strings">Strings (Serum)</option>
-            <option value="arp">Arp (Serum)</option>
-            <option value="pluck">Pluck (Serum)</option>
-            <option value="seq">Seq (Serum)</option>
-            <option value="synth">Synth (Serum)</option>
-            <option value="hoover">Hoover (Serum)</option>
-          </select>
         </div>
       </section>
 
@@ -314,7 +339,7 @@
   <dialog id="save-dialog">
     <form method="dialog" class="dialog-card" id="save-form">
       <h2>Save loop</h2>
-      <p class="hint">Name this idea so you can reload it from My Loops.</p>
+      <p class="hint">Each save is a new loop in My Loops. Same name is fine — it won’t replace an older one.</p>
       <label class="field block">
         <span>Name</span>
         <input type="text" id="save-name" maxlength="80" placeholder="e.g. Fmin techno groove" autocomplete="off" required />
@@ -447,7 +472,8 @@
     </div>
   </dialog>
 
-  <script src="midi.js?v=loop-4bars"></script>
-  <script src="app.js?v=kid-time-1"></script>
+  <script src="midi.js?v=midi-shape"></script>
+  <script src="harmony.js?v=theme-v1"></script>
+  <script src="app.js?v=bars-1"></script>
 </body>
 </html>

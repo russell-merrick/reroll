@@ -5,8 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from backend.midi_util import (
+    cell_voices,
     collapse_tiled_bar_notes,
     degree_to_midi,
+    expand_bars,
     grid_to_notes,
     parse_key_from_name,
     transpose_semitones_from_name,
@@ -17,6 +19,51 @@ from backend.midi_util import (
 def test_degree_to_midi_f_minor_root():
     # F minor root at octave 2 → F2 = 41
     assert degree_to_midi("F minor", 0, 2) == 41
+
+
+def test_degree_to_midi_alter_raises_third():
+    # F minor degree 6 = Eb3 at octave 2; +1 → E
+    assert degree_to_midi("F minor", 6, 2, alter=1) == degree_to_midi("F minor", 6, 2) + 1
+
+
+def test_expand_bars_no_double_tile():
+    assert expand_bars([None] * 16, 4) == 4
+    assert expand_bars([None] * 64, 4) == 1
+
+
+def test_cell_voices_fallback_and_stack():
+    assert cell_voices({"degree": 0, "length": 4, "vel": 90}) == [
+        {"degree": 0, "alter": 0, "vel": 90}
+    ]
+    stacked = {"degree": 0, "voices": [{"degree": 0}, {"degree": 2}, {"degree": 4}]}
+    assert len(cell_voices(stacked)) == 3
+
+
+def test_grid_64_not_double_tiled():
+    grid: list[dict | None] = [None] * 64
+    grid[0] = {"degree": 0, "length": 4, "vel": 100}
+    grid[63] = {"degree": 0, "length": 1, "vel": 100}
+    notes = grid_to_notes(grid, key="F minor", octave=2, bars=4)
+    assert max(n["start_beat"] for n in notes) < 16
+    assert len(notes) == 2
+
+
+def test_voices_same_start_beat():
+    grid: list[dict | None] = [None] * 16
+    grid[0] = {
+        "degree": 0,
+        "length": 16,
+        "vel": 90,
+        "voices": [
+            {"degree": 0, "oct": 3},
+            {"degree": 2, "oct": 3},
+            {"degree": 4, "oct": 3},
+        ],
+    }
+    notes = grid_to_notes(grid, key="F minor", octave=3, bars=1)
+    assert len(notes) == 3
+    assert {n["start_beat"] for n in notes} == {0.0}
+    assert len({n["midi"] for n in notes}) == 3
 
 
 def test_grid_quarters():

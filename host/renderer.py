@@ -21,6 +21,7 @@ from typing import Any, Literal
 import numpy as np
 
 from backend.midi_util import collapse_tiled_bar_notes
+from backend.midi_util import grid_to_notes as _grid_to_notes
 
 SAMPLE_RATE = 44100
 # Offline block size. 128 is a realtime default and makes a 4-bar bounce
@@ -176,18 +177,11 @@ def is_generic_macro_label(name: str | None) -> bool:
 
 
 def is_mapped_macro_name(name: str | None, *, engine: EngineKind = "serum1") -> bool:
-    """
-    Serum 1: hide default MACRO 1–4 labels (unmapped).
-    Serum 2: show knobs even with stock labels (S2 host rarely exposes renames).
-    Custom names always count as mapped.
-    """
+    """True only when the preset renamed the knob. Stock 'MACRO 6' is unused."""
     n = (name or "").strip()
     if not n:
         return False
-    if is_generic_macro_label(n):
-        # Serum 2: still show default Macro N knobs when VST names are stock
-        return engine == "serum2"
-    return True
+    return not is_generic_macro_label(n)
 
 
 def read_serum2_macros_from_preset(preset_path: str | Path | None) -> list[dict[str, Any]]:
@@ -262,11 +256,17 @@ def apply_serum2_preset_macro_labels(
         if not fm:
             out.append(m)
             continue
-        name = (fm.get("name") or "").strip()
+        name = (fm.get("name") or "").strip() or str(m.get("name") or "").strip()
+        mapped = bool(name) and not is_generic_macro_label(name)
         if not name:
-            out.append(m)
+            out.append({**m, "mapped": False})
             continue
-        updated = {**m, "name": name, "mapped": True, "name_source": "preset"}
+        updated = {
+            **m,
+            "name": name,
+            "mapped": mapped,
+            "name_source": "preset",
+        }
         # Prefer live plugin value; fall back to preset kParamValue if missing
         if m.get("value") is None and fm.get("value") is not None:
             updated["value"] = fm["value"]
@@ -844,47 +844,5 @@ def grid_to_notes(
     octave: int,
     bars: int = 4,
 ) -> list[dict[str, Any]]:
-    """Convert 16-step degree grid to beat-based notes (needs midi.js logic in Python)."""
-    note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-    major = [0, 2, 4, 5, 7, 9, 11]
-    minor = [0, 2, 3, 5, 7, 8, 10]
-    raw = (key or "C minor").strip()
+    return _grid_to_notes(grid, key=key, octave=octave, bars=bars)
 
-    m = re.match(r"([A-G])(#|b)?\s*(major|minor|maj|min)?", raw, re.I)
-    if not m:
-        root, quality = 0, "minor"
-    else:
-        name = m.group(1).upper() + (m.group(2) or "")
-        flat_map2 = {"Db": "C#", "Eb": "D#", "Gb": "F#", "Ab": "G#", "Bb": "A#"}
-        if name in flat_map2:
-            name = flat_map2[name]
-        root = note_names.index(name) if name in note_names else 0
-        q = (m.group(3) or "minor").lower()
-        quality = "major" if q in ("major", "maj") else "minor"
-    ints = major if quality == "major" else minor
-
-    def deg_to_midi(degree: int, octv: int) -> int:
-        d = degree % 7
-        return (octv + 1) * 12 + root + ints[d]
-
-    notes: list[dict[str, Any]] = []
-    steps = len(grid) or 16
-    for bar in range(bars):
-        for s, cell in enumerate(grid):
-            if not cell:
-                continue
-            degree = int(cell.get("degree", 0))
-            length = int(cell.get("length", 1))
-            vel = int(cell.get("vel", 100))
-            step = bar * steps + s
-            start_beat = step / 4.0  # 16ths
-            dur_beats = max(0.05, length / 4.0)
-            notes.append(
-                {
-                    "midi": deg_to_midi(degree, octave),
-                    "start_beat": start_beat,
-                    "duration_beats": dur_beats,
-                    "velocity": vel,
-                }
-            )
-    return notes

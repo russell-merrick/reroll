@@ -428,11 +428,17 @@ html[data-theme="rainbow"] .slot.serum {
 
 .options-instruments {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
 }
 
-@media (max-width: 560px) {
+@media (max-width: 720px) {
+  .options-instruments {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 480px) {
   .options-instruments {
     grid-template-columns: 1fr;
   }
@@ -440,7 +446,26 @@ html[data-theme="rainbow"] .slot.serum {
 
 .options-instruments .options-row {
   margin-bottom: 0;
-  padding: 8px 10px;
+  padding: 6px 8px;
+  gap: 8px;
+}
+
+.options-misc {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+@media (max-width: 480px) {
+  .options-misc {
+    grid-template-columns: 1fr;
+  }
+}
+
+.options-misc .options-row {
+  margin-bottom: 0;
+  padding: 6px 8px;
+  gap: 8px;
 }
 
 .options-row {
@@ -494,6 +519,195 @@ html[data-theme="rainbow"] .slot.serum {
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+}
+
+.theme-inline {
+  min-width: 0;
+}
+
+.theme-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.theme-inline.locked .theme-romans {
+  box-shadow: inset 0 0 0 1px var(--accent-glow);
+  border-radius: 8px;
+}
+
+.theme-romans {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.theme-inline .icon-btn.lock {
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+}
+
+.theme-roman {
+  appearance: none;
+  font: inherit;
+  cursor: pointer;
+  min-width: 3.4em;
+  text-align: center;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.theme-roman:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.theme-roman.empty {
+  min-width: 7.5em;
+  color: var(--text-faint);
+  font-weight: 500;
+}
+
+.theme-roman.on {
+  border-color: var(--accent-dim);
+  background: rgba(110, 231, 183, 0.14);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-glow);
+}
+
+.theme-roman.muted {
+  opacity: 0.38;
+  text-decoration: line-through;
+  color: var(--text-faint);
+}
+
+.theme-roman.muted.on {
+  opacity: 0.7;
+}
+
+.theme-roman.unused {
+  opacity: 0.32;
+  color: var(--text-faint);
+  background: var(--bg-muted, #12141a);
+  cursor: not-allowed;
+}
+
+.theme-roman.unused:disabled {
+  opacity: 0.32;
+}
+
+.theme-chord-picker {
+  position: fixed;
+  z-index: 80;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(2.4em, 1fr));
+  gap: 4px;
+  padding: 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.theme-chord-opt {
+  appearance: none;
+  font: inherit;
+  font-weight: 600;
+  min-width: 2.4em;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.theme-chord-opt:hover,
+.theme-chord-opt.current {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  background: rgba(110, 231, 183, 0.12);
+}
+
+.theme-meta {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.theme-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.theme-actions .icon-btn.lock {
+  min-width: 76px;
+  height: 34px;
+  padding: 0 10px;
+  gap: 4px;
+}
+
+.theme-actions .btn:disabled,
+.theme-actions .icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.theme-lead-shape,
+.midi-shape {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  flex: 1 1 100%;
+  align-items: flex-end;
+}
+
+.midi-shape {
+  padding: 4px 0 10px;
+}
+
+.theme-slider {
+  min-width: 140px;
+  flex: 1;
+  max-width: 260px;
+}
+
+.theme-slider > span:first-child {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.theme-slider output {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.theme-slider-ends {
+  display: flex;
+  justify-content: space-between;
+  margin-top: -2px;
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+
+.theme-slider-ends i {
+  font-style: normal;
+}
+
+.theme-slider input[type="range"] {
+  width: 100%;
 }
 
 .field {
@@ -760,7 +974,7 @@ html[data-theme="rainbow"] .slot.serum {
 
 .section-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 10px;
@@ -802,16 +1016,20 @@ html[data-theme="rainbow"] .slot.serum {
 .add-track-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--border);
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 .btn.add-track-btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
   border-style: dashed;
   color: var(--text-dim);
   background: transparent;
@@ -838,7 +1056,7 @@ html[data-theme="rainbow"] .slot.serum {
   color: var(--text);
   font: inherit;
   font-size: 0.8rem;
-  padding: 8px 10px;
+  padding: 7px 10px;
   cursor: pointer;
 }
 
@@ -914,6 +1132,44 @@ html[data-theme="rainbow"] .slot.serum {
 .slot.optional .slot-name {
   color: var(--text-faint);
   font-style: italic;
+}
+
+.slot-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.slot-name-row .slot-name {
+  flex: 0 1 auto;
+  width: max-content;
+  min-width: 0;
+  max-width: calc(100% - 26px);
+}
+
+.icon-btn.preset-lock {
+  width: 20px;
+  height: 20px;
+  font-size: 0.68rem;
+  flex-shrink: 0;
+  padding: 0;
+  line-height: 1;
+  color: #6b7280;
+  filter: grayscale(1);
+  opacity: 0.8;
+}
+
+.icon-btn.preset-lock.on {
+  color: #fbbf24;
+  filter: none;
+  opacity: 1;
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.45);
+  text-shadow: 0 0 8px rgba(251, 191, 36, 0.35);
+  /* 🔒 sits optically right of center at this size */
+  padding-right: 2px;
 }
 
 .slot.locked:not(.muted) {
@@ -1016,6 +1272,11 @@ html[data-theme="rainbow"] .slot.serum {
 .slot-body {
   min-width: 0; /* allow shrink so long names/meta ellipsis instead of shoving icons */
   overflow: hidden;
+}
+
+.slot.serum .slot-body {
+  cursor: pointer;
+  user-select: none;
 }
 
 .slot-name {
@@ -2797,6 +3058,52 @@ dialog:has(.dialog-card-wide) {
   margin-bottom: 14px;
 }
 
+.midi-bar-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+
+.midi-bar-pager[hidden] {
+  display: none;
+}
+
+.midi-bar-btn {
+  min-width: 5.5em;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-slot);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.midi-bar-btn:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-slot-hover);
+}
+
+.midi-bar-btn.on {
+  border-color: var(--accent-dim);
+  background: rgba(110, 231, 183, 0.16);
+  color: var(--accent);
+}
+
+.midi-bar-btn.muted {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+
+.midi-bar-btn[hidden] {
+  display: none;
+}
+
 .midi-grid-wrap {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -2901,20 +3208,25 @@ dialog:has(.dialog-card-wide) {
   border-color: #3d4555;
 }
 
-.midi-help {
-  margin: 10px 0 8px;
+.midi-cell.voices {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 1px;
+  font-size: 0.55rem;
+  line-height: 1.1;
+  min-height: 52px;
+  aspect-ratio: auto;
+  padding: 3px 2px;
 }
 
-.midi-preview-line {
-  font-family: var(--mono);
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  background: var(--bg);
-  border-radius: 6px;
-  padding: 8px 10px;
-  min-height: 2.4em;
-  margin-bottom: 12px;
-  word-break: break-word;
+.midi-cell.voices .midi-voice-name {
+  display: block;
+}
+
+.midi-help {
+  margin: 10px 0 8px;
 }
 
 /* Serum macros (inside MIDI section only) */
