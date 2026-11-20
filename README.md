@@ -43,6 +43,8 @@ python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
 
 Open **http://127.0.0.1:8000** (must be via the server — not `file://`).
 
+The Reroll shortcut on the desktop starts the server if it is not already running and opens the page in its own window. On a Mac, double-click `Reroll.app` in this folder. It does the same thing. The first launch may need a right-click and Open. If macOS says the app is damaged, run `chmod +x Reroll.app/Contents/MacOS/launcher`. The window needs Microsoft Edge or Google Chrome.
+
 First load loads **`library.db`** (SQLite) when present; otherwise scans default library roots, then saves the DB for faster next start. **Rescan** always re-walks disk and refreshes the DB.
 
 ### Optional: real Serum bounce
@@ -286,6 +288,7 @@ exports/
 | **Pitch-preserving sample warp** | Long loops (8-bar beds, etc.) must match session BPM **without** chipmunk pitch. Homemade WSOLA **failed** (drone / single-tone on melodic loops). Next: Rubber Band or server-side quality stretch — full notes in [`docs/SAMPLE_WARP.md`](docs/SAMPLE_WARP.md) |
 | **“More like this”** | Seed similar sounds from a locked track |
 | **Richer library browser** | Search / filter / preview beyond role counts |
+| **Drop loop into the open Live set** | Export already writes one WAV per track (plus `.mid` for Serum). Next: hand those files to `abl` (enABLEr) so each stem becomes a 4-bar arrangement clip on a same-named track in the set that is already open. MIDI becomes notes. Live's own undo applies. Does not write `.als`. `abl` lives in `edm-music-working/enABLEr`. |
 
 ### Nice to have
 

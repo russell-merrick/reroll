@@ -3722,6 +3722,29 @@ function syncThemeUi() {
   applyTheme(state.options.theme || "dark");
 }
 
+const FONT_MIN = 0.8;
+const FONT_MAX = 1.6;
+
+function currentFontScale() {
+  const raw = Number(getComputedStyle(document.documentElement).getPropertyValue("--font-scale"));
+  if (!Number.isFinite(raw)) return 1;
+  return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(raw * 10) / 10));
+}
+
+function applyFontScale(scale) {
+  const next = Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(Number(scale) * 10) / 10));
+  document.documentElement.style.setProperty("--font-scale", String(next));
+  try {
+    localStorage.setItem("reroll-font-scale", String(next));
+  } catch (_) {}
+  const label = $("#font-size-label");
+  if (label) label.textContent = `${Math.round(next * 100)}%`;
+  const down = $("#font-down");
+  const up = $("#font-up");
+  if (down) down.disabled = next <= FONT_MIN;
+  if (up) up.disabled = next >= FONT_MAX;
+}
+
 function setOptionsPanelOpen(open) {
   const panel = $("#options-panel");
   const btn = $("#btn-options");
@@ -6092,6 +6115,9 @@ function initUiChrome() {
     setStatus(`Theme · ${labels[theme] || theme}`);
     scheduleSaveUserSettings({ immediate: true });
   });
+  applyFontScale(currentFontScale());
+  $("#font-down")?.addEventListener("click", () => applyFontScale(currentFontScale() - 0.1));
+  $("#font-up")?.addEventListener("click", () => applyFontScale(currentFontScale() + 0.1));
   // Default until settings load
   applyTheme(state.options.theme || "dark");
   syncSerumEngineOptionsUi();

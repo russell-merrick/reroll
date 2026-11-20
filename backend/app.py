@@ -1752,3 +1752,13 @@ def midi_script() -> FileResponse:
 @app.get("/harmony.js")
 def harmony_script() -> FileResponse:
     return FileResponse(FRONTEND / "harmony.js", media_type="application/javascript")
+
+
+@app.get("/favicon.ico")
+def favicon_ico() -> FileResponse:
+    return FileResponse(FRONTEND / "favicon.ico", media_type="image/x-icon")
+
+
+@app.get("/favicon.png")
+def favicon_png() -> FileResponse:
+    return FileResponse(FRONTEND / "favicon.png", media_type="image/png")

@@ -1,0 +1,79 @@
+#!/bin/bash
+# Start Reroll if it is not already up, then open it in an app window.
+set -u
+
+root="$(cd "$(dirname "$0")/../../.." && pwd)"
+url="http://127.0.0.1:8000"
+log="$HOME/Library/Logs/Reroll/launch.log"
+profile="$HOME/Library/Application Support/Reroll/browser"
+
+say() {
+  osascript - "$1" <<'EOF' >/dev/null 2>&1 || true
+on run argv
+  display dialog (item 1 of argv) with title "Reroll" buttons {"OK"} default button 1 with icon caution
+end run
+EOF
+}
+
+up() {
+  curl -sf --max-time 0.4 "$url/api/health" >/dev/null 2>&1
+}
+
+if ! up; then
+  python=""
+  if command -v python3 >/dev/null 2>&1; then
+    python="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    python="$(command -v python)"
+  else
+    say "Python was not found, so Reroll could not start."
+    exit 1
+  fi
+  mkdir -p "$(dirname "$log")"
+  : >"$log"
+  cd "$root" || exit 1
+  nohup "$python" -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 >>"$log" 2>&1 &
+  disown >/dev/null 2>&1 || true
+  deadline=$((SECONDS + 40))
+  while (( SECONDS < deadline )); do
+    if up; then
+      break
+    fi
+    sleep 0.25
+  done
+  if ! up; then
+    detail=""
+    if [[ -f "$log" ]]; then
+      detail="$(tail -c 500 "$log" 2>/dev/null || true)"
+    fi
+    say "Reroll did not start.
+
+$detail"
+    exit 1
+  fi
+fi
+
+browser=""
+for candidate in \
+  "/Applications/Microsoft Edge.app" \
+  "$HOME/Applications/Microsoft Edge.app" \
+  "/Applications/Google Chrome.app" \
+  "$HOME/Applications/Google Chrome.app"
+do
+  if [[ -d "$candidate" ]]; then
+    browser="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$browser" ]]; then
+  open "$url"
+  say "Reroll is open in your browser. Install Microsoft Edge or Google Chrome for a window without tabs or an address bar."
+  exit 0
+fi
+
+mkdir -p "$profile"
+if ! open -na "$browser" --args --app="$url" --user-data-dir="$profile" --window-size=1280,800; then
+  say "The Reroll window could not open."
+  exit 1
+fi
