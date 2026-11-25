@@ -30,20 +30,19 @@ Without Serum host deps, the UI still runs: drums/samples work; synth tracks fal
 ## Quick start
 
 ```powershell
-git clone <your-repo-url>
+git clone https://github.com/russell-merrick/reroll.git
 cd reroll
-# or: cd loop_gen_project
 
 # App dependencies
 python -m pip install -r requirements.txt
 
-# Run the server
+# Run the server (dev, with reload)
 python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 Open **http://127.0.0.1:8000** (must be via the server — not `file://`).
 
-The Reroll shortcut on the desktop starts the server if it is not already running and opens the page in its own window. On a Mac, double-click `Reroll.app` in this folder. It does the same thing. The first launch may need a right-click and Open. If macOS says the app is damaged, run `chmod +x Reroll.app/Contents/MacOS/launcher`. The window needs Microsoft Edge or Google Chrome.
+Run `launch.vbs` in this folder, or a desktop shortcut that points at it. It starts the server when http://127.0.0.1:8000/api/health is down (uvicorn, without `--reload`), then opens the page in its own Edge window at 1280×800. That size is set on every launch, so a resized window does not stick. Closing the window leaves the server running. On a Mac, double-click `Reroll.app` in this folder. It does the same thing. The first launch may need a right-click and Open. If macOS says the app is damaged, run `chmod +x Reroll.app/Contents/MacOS/launcher`. The window needs Microsoft Edge or Google Chrome. Font size is in Options, under Theme, from 80% to 160%.
 
 First load loads **`library.db`** (SQLite) when present; otherwise scans default library roots, then saves the DB for faster next start. **Rescan** always re-walks disk and refreshes the DB.
 
@@ -137,7 +136,7 @@ Remote / File Stream paths work if Windows can open the files (online-only place
 ## Using the app
 
 1. Set **BPM**, **key**, **style** (session controls).
-2. **Reroll** — fills unlocked tracks from your library.
+2. **Reroll** — fills unlocked tracks from your library. The **Chords** row shows the session progression. Reroll fills it when it is unlocked, and the lock keeps it. Bass and lead MIDI follow those chords.
 3. **Lock** keepers; **dice** (🔀 per track) or **Reroll** the rest.
 4. **Play** (or **Space**) — loops forever; button toggles stop.
 5. Serum tracks: **M** opens MIDI editor (stackable); length toolbar + drag to resize notes; macros when the host can load the preset.
@@ -165,7 +164,7 @@ Remote / File Stream paths work if Windows can open the files (online-only place
 ## Project layout
 
 ```text
-reroll/   (or loop_gen_project/)
+reroll/
   README.md
   requirements.txt          # main app
   requirements-dev.txt      # + pytest
@@ -264,6 +263,7 @@ exports/
 | Dynamic tracks | Add / delete; stack any number |
 | Reroll / dice | Unlocked tracks only; Reroll auto-plays |
 | **Style lean** | Soft pack/path weights; suggestions ranked from *your* pack names; No preference = random |
+| **Chords** | Session progression on the Chords row. Lock keeps it. Reroll rewrites unlocked bass and lead MIDI to match |
 | Serum 1 / 2 filter | Options + per-track type (BASS, LEAD, …) |
 | MIDI | Monophonic 16-step grids; note length + edge drag |
 | Macros | S1 mapped renames; S2 names from `.SerumPreset` file |
@@ -284,7 +284,7 @@ exports/
 
 | Feature | Notes |
 |---------|--------|
-| **Writing-night hook** | 4-bar progression + dice-lead on `/` so Serum isn’t a tiled 1-bar wallpaper. Spec: [`docs/WRITING_NIGHT_HOOK.md`](docs/WRITING_NIGHT_HOOK.md). `/arrange` is deferred ([`docs/SUBTRACTIVE_ARRANGER.md`](docs/SUBTRACTIVE_ARRANGER.md)). |
+| **Writing-night hook, rest of it** | The Chords row, lock, and bass/lead rewrite are in the app. Still later: the rest of [`docs/WRITING_NIGHT_HOOK.md`](docs/WRITING_NIGHT_HOOK.md). `/arrange` stays deferred ([`docs/SUBTRACTIVE_ARRANGER.md`](docs/SUBTRACTIVE_ARRANGER.md)). |
 | **Pitch-preserving sample warp** | Long loops (8-bar beds, etc.) must match session BPM **without** chipmunk pitch. Homemade WSOLA **failed** (drone / single-tone on melodic loops). Next: Rubber Band or server-side quality stretch — full notes in [`docs/SAMPLE_WARP.md`](docs/SAMPLE_WARP.md) |
 | **“More like this”** | Seed similar sounds from a locked track |
 | **Richer library browser** | Search / filter / preview beyond role counts |
